@@ -10,6 +10,8 @@ __pycache__/
 .env
 *.log
 _check.js
+push_stdout.txt
+push_stderr.txt
 
 # Generated temporary task data
 downloads/*
