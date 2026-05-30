@@ -8,7 +8,7 @@ import urllib.request
 from pathlib import Path
 
 
-OWNER = "xcsh2000"
+OWNER = "xchsh2000"
 REPO = "Youtube"
 BRANCH = "main"
 API_ROOT = "https://api.github.com"

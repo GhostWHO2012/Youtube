@@ -2,7 +2,7 @@
 chcp 65001 >nul
 cd /d "%~dp0"
 
-set REPO_URL=git@github.com:xcsh2000/Youtube.git
+set REPO_URL=git@github.com:xchsh2000/Youtube.git
 set GIT_DIR_PATH=%~dp0.gitdata
 set WORK_TREE_PATH=%~dp0
 set SSH_KEY_PATH=%~dp0.ssh_github\youtube_github_ed25519
@@ -33,7 +33,7 @@ echo.
 if errorlevel 1 (
   echo 上传失败。请把上面的错误信息发给 Codex。
 ) else (
-  echo 上传完成：https://github.com/xcsh2000/Youtube
+  echo 上传完成：https://github.com/xchsh2000/Youtube
 )
 echo.
 pause
