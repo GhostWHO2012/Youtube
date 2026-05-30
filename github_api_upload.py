@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import sys
+import urllib.parse
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -73,6 +74,33 @@ def tracked_files():
     return files
 
 
+def upload_with_contents_api(token, files, message):
+    print("检测到空仓库，改用 Contents API 创建初始文件。")
+    for rel_path in files:
+        full_path = ROOT / rel_path
+        api_path = urllib.parse.quote(rel_path.replace("\\", "/"), safe="/")
+        current = request_json(
+            "GET",
+            f"/repos/{OWNER}/{REPO}/contents/{api_path}?ref={BRANCH}",
+            token,
+            allow_404=True,
+        )
+        payload = {
+            "message": message,
+            "content": base64.b64encode(full_path.read_bytes()).decode("ascii"),
+            "branch": BRANCH,
+        }
+        if current and current.get("sha"):
+            payload["sha"] = current["sha"]
+        request_json(
+            "PUT",
+            f"/repos/{OWNER}/{REPO}/contents/{api_path}",
+            token,
+            payload,
+        )
+        print(f"已上传：{rel_path}")
+
+
 def main():
     token = os.environ.get("GITHUB_TOKEN", "").strip()
     if not token:
@@ -92,18 +120,21 @@ def main():
         token,
         allow_404=True,
     )
+    if ref is None:
+        upload_with_contents_api(token, files, f"{message}\n\nInitial upload from local commit: {short_sha}")
+        print(f"上传完成：https://github.com/{OWNER}/{REPO}")
+        return
 
     parents = []
     base_tree = None
-    if ref:
-        parent_sha = ref["object"]["sha"]
-        parents = [parent_sha]
-        parent_commit = request_json(
-            "GET",
-            f"/repos/{OWNER}/{REPO}/git/commits/{parent_sha}",
-            token,
-        )
-        base_tree = parent_commit["tree"]["sha"]
+    parent_sha = ref["object"]["sha"]
+    parents = [parent_sha]
+    parent_commit = request_json(
+        "GET",
+        f"/repos/{OWNER}/{REPO}/git/commits/{parent_sha}",
+        token,
+    )
+    base_tree = parent_commit["tree"]["sha"]
 
     tree_entries = []
     for rel_path in files:
@@ -130,8 +161,7 @@ def main():
         print(f"已准备：{rel_path}")
 
     tree_payload = {"tree": tree_entries}
-    if base_tree:
-        tree_payload["base_tree"] = base_tree
+    tree_payload["base_tree"] = base_tree
 
     tree = request_json(
         "POST",
@@ -150,20 +180,12 @@ def main():
         },
     )
 
-    if ref:
-        request_json(
-            "PATCH",
-            f"/repos/{OWNER}/{REPO}/git/refs/heads/{BRANCH}",
-            token,
-            {"sha": commit["sha"], "force": False},
-        )
-    else:
-        request_json(
-            "POST",
-            f"/repos/{OWNER}/{REPO}/git/refs",
-            token,
-            {"ref": f"refs/heads/{BRANCH}", "sha": commit["sha"]},
-        )
+    request_json(
+        "PATCH",
+        f"/repos/{OWNER}/{REPO}/git/refs/heads/{BRANCH}",
+        token,
+        {"sha": commit["sha"], "force": False},
+    )
 
     print(f"上传完成：https://github.com/{OWNER}/{REPO}")
     print(f"GitHub commit: {commit['sha']}")
