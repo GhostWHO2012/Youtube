@@ -15,18 +15,18 @@ git --git-dir="%GIT_DIR_PATH%" --work-tree="%WORK_TREE_PATH%" remote set-url ori
 if errorlevel 1 git --git-dir="%GIT_DIR_PATH%" --work-tree="%WORK_TREE_PATH%" remote add origin %REPO_URL%
 
 git --git-dir="%GIT_DIR_PATH%" --work-tree="%WORK_TREE_PATH%" config http.sslverify true
-git --git-dir="%GIT_DIR_PATH%" --work-tree="%WORK_TREE_PATH%" config http.sslbackend schannel
+git --git-dir="%GIT_DIR_PATH%" --work-tree="%WORK_TREE_PATH%" config http.sslbackend openssl
 
 echo.
 echo 如果这是第一次上传，会打开 GitHub 设备码登录流程。
 echo 请按窗口提示打开网页、输入代码，并授权 xcsh2000 账号。
 echo.
 
-git -c http.sslVerify=true -c http.sslBackend=schannel credential-manager github login --username xcsh2000 --device
+git -c http.sslVerify=true -c http.sslBackend=openssl credential-manager github login --username xcsh2000 --device
 
 echo.
 echo 正在推送 main 分支...
-git -c http.sslVerify=true -c http.sslBackend=schannel --git-dir="%GIT_DIR_PATH%" --work-tree="%WORK_TREE_PATH%" push -u origin main
+git -c http.sslVerify=true -c http.sslBackend=openssl --git-dir="%GIT_DIR_PATH%" --work-tree="%WORK_TREE_PATH%" push -u origin main
 
 echo.
 if errorlevel 1 (
