@@ -5,6 +5,7 @@ __pycache__/
 # Local assistant/tool settings
 .claude/
 .gitdata/
+.ssh_github/
 
 # Local environment and logs
 .env
