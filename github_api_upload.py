@@ -54,7 +54,7 @@ def request_json(method, path, token, payload=None, allow_404=False):
                 return None
             return json.loads(data.decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        if allow_404 and exc.code == 404:
+        if allow_404 and exc.code in (404, 409):
             return None
         detail = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"GitHub API {method} {path} failed: HTTP {exc.code}\n{detail}") from exc
