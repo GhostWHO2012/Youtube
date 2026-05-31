@@ -26,6 +26,18 @@ app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 4 * 1024 * 1024 * 1024
 DOWNLOADS_DIR = Path(__file__).parent / "downloads"
 DOWNLOADS_DIR.mkdir(exist_ok=True)
+PROJECTS_DIR = DOWNLOADS_DIR / "projects"
+PROJECTS_DIR.mkdir(exist_ok=True)
+
+PROJECT_SUBDIRS = {
+    "source": "00_source",
+    "video": "01_video",
+    "audio": "02_audio",
+    "subtitles": "03_subtitles",
+    "description": "04_description",
+    "translation": "10_translation",
+    "clips": "40_clips",
+}
 
 tasks = {}
 task_lock = threading.Lock()
@@ -36,6 +48,244 @@ local_subtitle_lock = threading.Lock()
 
 def sanitize_filename(name):
     return re.sub(r'[<>:"/\\|?*]', '_', name)
+
+
+def project_safe_name(name):
+    safe = sanitize_filename(name or "").strip().strip(".")
+    safe = re.sub(r"\s+", " ", safe)
+    return safe[:120] or f"project_{time.strftime('%Y%m%d_%H%M%S')}"
+
+
+def ensure_project_dirs(title):
+    project_dir = PROJECTS_DIR / project_safe_name(title)
+    project_dir.mkdir(parents=True, exist_ok=True)
+    subdirs = {}
+    for key, folder in PROJECT_SUBDIRS.items():
+        path = project_dir / folder
+        path.mkdir(parents=True, exist_ok=True)
+        subdirs[key] = path
+    return project_dir, subdirs
+
+
+def rel_download_path(path):
+    try:
+        return str(Path(path).resolve().relative_to(DOWNLOADS_DIR.resolve())).replace("\\", "/")
+    except Exception:
+        return Path(path).name
+
+
+def seconds_to_desc_time(seconds):
+    seconds = max(0, int(seconds or 0))
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h:02d}:{m:02d}:{s:02d}"
+    return f"{m:02d}:{s:02d}"
+
+
+def extract_timeline_from_info(info, fallback_timeline=""):
+    chapters = info.get("chapters") or []
+    lines = []
+    for chapter in chapters:
+        start = seconds_to_desc_time(chapter.get("start_time", 0))
+        title = (chapter.get("title") or "").strip()
+        if title:
+            lines.append(f"{start} {title}")
+
+    if lines:
+        return "\n".join(lines)
+
+    desc = info.get("description") or ""
+    timeline_lines = []
+    pattern = re.compile(r"(?:(?:\d{1,2}:)?\d{1,2}:\d{2})")
+    for raw in desc.splitlines():
+        line = raw.strip()
+        if pattern.search(line):
+            timeline_lines.append(line)
+
+    if timeline_lines:
+        return "\n".join(timeline_lines)
+    return fallback_timeline or ""
+
+
+def build_bilibili_description(info, url, timeline=""):
+    title = info.get("title", "")
+    uploader = info.get("uploader") or info.get("channel") or ""
+    desc = (info.get("description") or "").strip()
+    parts = []
+    if title:
+        parts.append(f"原视频标题：{title}")
+    if uploader:
+        parts.append(f"原作者/频道：{uploader}")
+    if url:
+        parts.append(f"原视频链接：{url}")
+    if desc:
+        parts.append("\n原视频简介：\n" + desc)
+    if timeline:
+        parts.append("\n时间轴：\n" + timeline)
+    parts.append("\n说明：本文件由本地项目自动整理，可继续用于字幕翻译、双语字幕和切片。")
+    return "\n".join(parts).strip() + "\n"
+
+
+def write_project_notes(project_dir, subdirs, info=None, url="", timeline=""):
+    info = info or {}
+    title = info.get("title") or project_dir.name
+    meta = {
+        "title": title,
+        "url": url,
+        "uploader": info.get("uploader", ""),
+        "channel": info.get("channel", ""),
+        "duration": info.get("duration", 0),
+        "upload_date": info.get("upload_date", ""),
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "project_dir": str(project_dir),
+    }
+    (subdirs["source"] / "source_meta.json").write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (subdirs["description"] / "bilibili_description.txt").write_text(
+        build_bilibili_description(info, url, timeline),
+        encoding="utf-8",
+    )
+    (subdirs["description"] / "timeline_outline.md").write_text(
+        f"# {title}\n\n## 时间轴大纲\n\n{timeline or '暂无时间轴，后续可由字幕分析生成。'}\n",
+        encoding="utf-8",
+    )
+
+
+def fetch_video_info(url):
+    result = subprocess.run(
+        ["yt-dlp", "-j", "--no-warnings", url],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=60,
+    )
+    if result.returncode != 0:
+        return {}
+    try:
+        return json.loads(result.stdout)
+    except Exception:
+        return {}
+
+
+def target_dir_for_project_file(project_dir, subdirs, path):
+    suffix = path.suffix.lower()
+    name = path.name.lower()
+    if suffix in (".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi"):
+        return subdirs["translation"] if ".hardsub" in name else subdirs["video"]
+    if suffix in (".mp3", ".m4a", ".wav", ".aac", ".flac", ".opus", ".ogg"):
+        return subdirs["audio"]
+    if suffix in (".srt", ".vtt"):
+        return subdirs["subtitles"]
+    if suffix in (".ass",):
+        return subdirs["translation"] if ".dual" in name else subdirs["subtitles"]
+    if suffix in (".description", ".txt", ".md"):
+        return subdirs["description"]
+    if suffix in (".json", ".jpg", ".jpeg", ".png", ".webp"):
+        return subdirs["source"]
+    if name.endswith(".log"):
+        return subdirs["source"]
+    return subdirs["source"]
+
+
+def move_project_outputs(project_dir, subdirs):
+    for path in list(project_dir.iterdir()):
+        if path.is_dir():
+            continue
+        target_dir = target_dir_for_project_file(project_dir, subdirs, path)
+        target = target_dir / path.name
+        if target.exists():
+            target = target_dir / f"{path.stem}.{int(time.time())}{path.suffix}"
+        try:
+            path.replace(target)
+        except Exception:
+            shutil.copy2(path, target)
+            try:
+                path.unlink()
+            except Exception:
+                pass
+
+
+def find_primary_video(search_dir):
+    candidates = [
+        p for p in search_dir.rglob("*")
+        if p.is_file()
+        and p.suffix.lower() in (".mp4", ".mov", ".mkv", ".webm", ".m4v")
+        and ".hardsub" not in p.name.lower()
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda p: p.stat().st_mtime)
+
+
+def ensure_audio_from_video(project_dir, subdirs, update=None):
+    video = find_primary_video(project_dir)
+    if not video:
+        return None
+    audio_path = subdirs["audio"] / f"{sanitize_filename(video.stem)}.audio.m4a"
+    if audio_path.exists() and audio_path.stat().st_size > 0:
+        return audio_path
+    if update:
+        update("downloading", 96, "Extracting audio for ASR...")
+    result = subprocess.run(
+        [
+            "ffmpeg", "-y", "-i", str(video),
+            "-vn", "-c:a", "aac", "-b:a", "128k",
+            str(audio_path),
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=1800,
+    )
+    if result.returncode != 0 or not audio_path.exists():
+        return None
+    return audio_path
+
+
+def save_session_translation_artifacts(session, stem="subtitle"):
+    project_dir = session.get("project_dir")
+    translation_dir = session.get("translation_dir")
+    if not translation_dir:
+        return {}
+    translation_dir = Path(translation_dir)
+    translation_dir.mkdir(parents=True, exist_ok=True)
+    stem = sanitize_filename(Path(stem or session.get("name") or "subtitle").stem) or "subtitle"
+    entries = session.get("entries", [])
+    outputs = {}
+    source_entries = [{**e, "translation": ""} for e in entries]
+    raw_en = entries_to_srt(source_entries, bilingual=False, order="en_top")
+    if raw_en.strip():
+        path = translation_dir / f"{stem}.corrected_en.srt"
+        path.write_text(raw_en, encoding="utf-8")
+        outputs["corrected_en"] = path
+    if any((e.get("translation") or "").strip() for e in entries):
+        zh = entries_to_srt([{**e, "source": e.get("translation", ""), "translation": ""} for e in entries], bilingual=False)
+        zh_path = translation_dir / f"{stem}.zh.srt"
+        zh_path.write_text(zh, encoding="utf-8")
+        outputs["zh"] = zh_path
+        for order in ("en_top", "zh_top"):
+            bi_path = translation_dir / f"{stem}.bilingual.{order}.srt"
+            bi_path.write_text(entries_to_srt(entries, bilingual=True, order=order), encoding="utf-8")
+            outputs[f"bilingual_{order}"] = bi_path
+    if project_dir:
+        (translation_dir / "translation_manifest.json").write_text(
+            json.dumps(
+                {
+                    "project_dir": project_dir,
+                    "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "files": {k: rel_download_path(v) for k, v in outputs.items()},
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    return outputs
 
 
 def get_subtitle_timeline(url):
@@ -629,7 +879,7 @@ def serialize_local_entries(entries, limit=120):
     } for i, e in enumerate(visible)]
 
 
-def create_local_session(original_name, entries):
+def create_local_session(original_name, entries, project_dir=None, translation_dir=None, source_path=None):
     session_id = str(uuid.uuid4())[:8]
     for i, entry in enumerate(entries, 1):
         entry["index"] = i
@@ -639,6 +889,9 @@ def create_local_session(original_name, entries):
             "name": original_name,
             "entries": entries,
             "corrections": [],
+            "project_dir": str(project_dir) if project_dir else "",
+            "translation_dir": str(translation_dir) if translation_dir else "",
+            "source_path": str(source_path) if source_path else "",
             "created_at": time.time(),
         }
     return session_id
@@ -661,6 +914,8 @@ def local_session_payload(session, limit=120):
         "segments": len(entries),
         "translated": translated,
         "corrections": session.get("corrections", []),
+        "project_dir": session.get("project_dir", ""),
+        "translation_dir": session.get("translation_dir", ""),
         "entries": serialize_local_entries(entries, limit=limit),
     }
 
@@ -782,7 +1037,7 @@ def apply_asr_corrections(entries, corrections):
             continue
         wrong = str(item.get("wrong", "")).strip()
         correct = str(item.get("correct", "")).strip()
-        if wrong and correct and wrong.lower() != correct.lower():
+        if wrong and correct and wrong != correct:
             normalized.append((wrong, correct))
 
     for entry in entries:
@@ -944,6 +1199,17 @@ def run_local_subtitle_task(task_id, media_path, original_name, opts):
         entries = parse_srt_content(srt_text)
         if not entries:
             raise RuntimeError("未识别出可用字幕。")
+        project_dir = Path(opts["project_dir"]) if opts.get("project_dir") else None
+        translation_dir = Path(opts["translation_dir"]) if opts.get("translation_dir") else None
+        if translation_dir:
+            translation_dir.mkdir(parents=True, exist_ok=True)
+            (translation_dir / "raw_en.srt").write_text(srt_text, encoding="utf-8")
+        if project_dir:
+            _, subdirs = ensure_project_dirs(project_dir.name)
+            (subdirs["subtitles"] / f"{sanitize_filename(Path(original_name).stem)}.raw_en.srt").write_text(
+                srt_text,
+                encoding="utf-8",
+            )
 
         api_url = opts.get("api_url", "").strip()
         api_key = opts.get("api_key", "").strip()
@@ -961,30 +1227,42 @@ def run_local_subtitle_task(task_id, media_path, original_name, opts):
 
         local_task_update(task_id, progress=94, message="正在导出字幕文件...")
         bilingual = opts.get("output_mode", "bilingual") == "bilingual"
-        output_text = entries_to_srt(entries, bilingual=bilingual)
+        order = opts.get("order", "en_top")
+        output_text = entries_to_srt(entries, bilingual=bilingual, order=order)
         stem = sanitize_filename(Path(original_name).stem or "local_video")
         suffix = "bilingual" if bilingual else "zh"
+        if bilingual:
+            suffix += ".zh-top" if order == "zh_top" else ".en-top"
         output_name = f"{stem}.local.{suffix}.srt"
-        output_path = DOWNLOADS_DIR / output_name
+        output_dir = translation_dir or DOWNLOADS_DIR
+        output_path = output_dir / output_name
         output_path.write_text(output_text, encoding="utf-8")
+        session = {
+            "name": original_name,
+            "entries": entries,
+            "project_dir": str(project_dir) if project_dir else "",
+            "translation_dir": str(translation_dir) if translation_dir else "",
+        }
+        save_session_translation_artifacts(session, stem)
 
         local_task_update(
             task_id,
             status="completed",
             progress=100,
             message=f"完成：{len(entries)} 条字幕，应用 {applied} 处校正",
-            file=output_name,
-            url=f"/files/{output_name}",
+            file=rel_download_path(output_path),
+            url=f"/files/{rel_download_path(output_path)}",
             corrections=corrections,
             segments=len(entries),
         )
     except Exception as e:
         local_task_update(task_id, status="error", message=str(e), error=str(e))
     finally:
-        try:
-            shutil.rmtree(media_path.parent, ignore_errors=True)
-        except Exception:
-            pass
+        if opts.get("cleanup_parent", True):
+            try:
+                shutil.rmtree(media_path.parent, ignore_errors=True)
+            except Exception:
+                pass
 
 
 def run_local_import_task(task_id, media_path, original_name, opts):
@@ -994,7 +1272,22 @@ def run_local_import_task(task_id, media_path, original_name, opts):
         entries = parse_srt_content(srt_text)
         if not entries:
             raise RuntimeError("未识别出可用字幕。")
-        session_id = create_local_session(original_name, entries)
+        project_dir = Path(opts["project_dir"]) if opts.get("project_dir") else None
+        translation_dir = Path(opts["translation_dir"]) if opts.get("translation_dir") else None
+        if translation_dir:
+            translation_dir.mkdir(parents=True, exist_ok=True)
+            (translation_dir / "raw_en.srt").write_text(srt_text, encoding="utf-8")
+        if project_dir:
+            _, subdirs = ensure_project_dirs(project_dir.name)
+            raw_sub_path = subdirs["subtitles"] / f"{sanitize_filename(Path(original_name).stem)}.raw_en.srt"
+            raw_sub_path.write_text(srt_text, encoding="utf-8")
+        session_id = create_local_session(
+            original_name,
+            entries,
+            project_dir=project_dir,
+            translation_dir=translation_dir,
+            source_path=opts.get("source_path") or media_path,
+        )
         local_task_update(
             task_id,
             status="completed",
@@ -1006,10 +1299,11 @@ def run_local_import_task(task_id, media_path, original_name, opts):
     except Exception as e:
         local_task_update(task_id, status="error", message=str(e), error=str(e))
     finally:
-        try:
-            shutil.rmtree(media_path.parent, ignore_errors=True)
-        except Exception:
-            pass
+        if opts.get("cleanup_parent", True):
+            try:
+                shutil.rmtree(media_path.parent, ignore_errors=True)
+            except Exception:
+                pass
 
 
 def run_local_translate_task(task_id, session_id, opts):
@@ -1028,6 +1322,8 @@ def run_local_translate_task(task_id, session_id, opts):
         with local_subtitle_lock:
             if session_id in local_subtitle_sessions:
                 local_subtitle_sessions[session_id]["entries"] = entries
+                session = local_subtitle_sessions[session_id]
+        save_session_translation_artifacts(session, Path(session.get("name") or "subtitle").stem)
         local_task_update(
             task_id,
             status="completed",
@@ -1119,7 +1415,12 @@ def get_format_string(codec, quality):
 
 def run_download(task_id, url, options):
     cmd = ["yt-dlp", "--no-warnings", "--ignore-errors", "--js-runtimes", "node", "--remote-components", "ejs:github"]
-    output_template = str(DOWNLOADS_DIR / "%(title)s.%(ext)s")
+    info = fetch_video_info(url)
+    project_title = info.get("title") or options.get("project_title") or "untitled_video"
+    project_dir, project_subdirs = ensure_project_dirs(project_title)
+    timeline = extract_timeline_from_info(info, get_subtitle_timeline(url))
+    write_project_notes(project_dir, project_subdirs, info, url, timeline)
+    output_template = str(project_dir / "%(title)s.%(ext)s")
 
     download_type = options.get("type", "video")
     quality = options.get("quality", "1080")
@@ -1180,9 +1481,11 @@ def run_download(task_id, url, options):
                 "progress": progress or tasks[task_id].get("progress", 0),
                 "message": message or tasks[task_id].get("message", ""),
                 "files": files or tasks[task_id].get("files", []),
+                "project_dir": str(project_dir),
+                "project": project_dir.name,
             })
 
-    update("downloading", 0, "Starting download...")
+    update("downloading", 0, f"Starting download into project: {project_dir.name}")
 
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
@@ -1196,11 +1499,11 @@ def run_download(task_id, url, options):
             encoding="utf-8",
             errors="replace",
             env=env,
-            cwd=str(DOWNLOADS_DIR),
+            cwd=str(project_dir),
         )
 
         last_lines = []
-        log_path = DOWNLOADS_DIR / "_download.log"
+        log_path = project_dir / "_download.log"
         logf = open(log_path, "w", encoding="utf-8")
         logf.write(f"CMD: {' '.join(cmd)}\n\n")
         logf.flush()
@@ -1231,29 +1534,32 @@ def run_download(task_id, url, options):
         process.wait()
 
         # Clean up .part files from interrupted downloads
-        for f in DOWNLOADS_DIR.glob("*.part"):
+        for f in project_dir.glob("*.part"):
             f.unlink(missing_ok=True)
 
         # yt-dlp may return non-zero if subtitle download fails (e.g. 429)
         # but the video itself might still be downloaded successfully
-        has_video = download_type == "audio" or any(DOWNLOADS_DIR.glob("*.mp4"))
+        has_video = download_type == "audio" or any(project_dir.glob("*.mp4"))
 
         if process.returncode == 0 or has_video:
             if download_type == "video":
                 if options.get("ae_compat"):
-                    fix_video_for_ae(DOWNLOADS_DIR, update)
+                    fix_video_for_ae(project_dir, update)
                 else:
-                    fix_audio_codec(DOWNLOADS_DIR, update)
+                    fix_audio_codec(project_dir, update)
 
             if dual_sub:
                 update("downloading", 95, "Processing dual subtitles...")
-                ass_name = process_dual_subtitles(DOWNLOADS_DIR, sub_opts, update)
+                ass_name = process_dual_subtitles(project_dir, sub_opts, update)
                 if options.get("burn_sub") and ass_name:
                     update("downloading", 96, "Burning subtitles into video...")
-                    burn_subtitles_to_video(DOWNLOADS_DIR, ass_name, update)
+                    burn_subtitles_to_video(project_dir, ass_name, update)
                 elif ass_name:
                     update("downloading", 99, f"Subtitle file generated")
-            update("completed", 100, "Download complete!", list_downloaded_files())
+            if download_type == "video":
+                ensure_audio_from_video(project_dir, project_subdirs, update)
+            move_project_outputs(project_dir, project_subdirs)
+            update("completed", 100, f"Download complete: {project_dir.name}", list_downloaded_files())
         else:
             update("error", message=f"Download failed (exit code {process.returncode}): {'; '.join(last_lines[-5:])}")
 
@@ -1263,14 +1569,21 @@ def run_download(task_id, url, options):
 
 def list_downloaded_files():
     files = []
-    for f in sorted(DOWNLOADS_DIR.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
-        if f.is_file() and f.suffix not in ('.json', '.description'):
+    ignored_parts = {"_local_tasks", "__pycache__"}
+    for f in sorted(DOWNLOADS_DIR.rglob("*"), key=lambda x: x.stat().st_mtime if x.exists() else 0, reverse=True):
+        if not f.is_file():
+            continue
+        rel = f.relative_to(DOWNLOADS_DIR)
+        if any(part in ignored_parts or part.startswith(".") for part in rel.parts):
+            continue
+        if f.suffix not in ('.json', '.description'):
             size_mb = f.stat().st_size / (1024 * 1024)
+            rel_name = str(rel).replace("\\", "/")
             files.append({
-                "name": f.name,
+                "name": rel_name,
                 "size": round(size_mb, 2),
                 "ext": f.suffix.lstrip('.'),
-                "url": f"/files/{f.name}",
+                "url": f"/files/{rel_name}",
             })
     return files
 
@@ -1306,19 +1619,36 @@ def import_local_subtitle():
     original_name = re.split(r"[\\/]", upload.filename or "local_file")[-1]
     safe_name = sanitize_filename(original_name) or f"{uuid.uuid4().hex}.tmp"
     suffix = Path(safe_name).suffix.lower()
+    project_title = request.form.get("project_title", "").strip() or Path(original_name).stem or "local_audio"
+    project_dir, project_subdirs = ensure_project_dirs(project_title)
+    write_project_notes(project_dir, project_subdirs, {"title": project_title}, "", "")
 
     if suffix == ".srt":
-        text = upload.read().decode("utf-8", errors="replace")
+        raw_bytes = upload.read()
+        text = raw_bytes.decode("utf-8", errors="replace")
         entries = parse_srt_content(text)
         if not entries:
             return jsonify({"error": "没有解析到可用 SRT 字幕"}), 400
-        session_id = create_local_session(original_name, entries)
+        source_srt = project_subdirs["subtitles"] / safe_name
+        source_srt.write_bytes(raw_bytes)
+        (project_subdirs["translation"] / "raw_en.srt").write_text(text, encoding="utf-8")
+        session_id = create_local_session(
+            original_name,
+            entries,
+            project_dir=project_dir,
+            translation_dir=project_subdirs["translation"],
+            source_path=source_srt,
+        )
         return jsonify(local_session_payload(get_local_session(session_id)))
 
     task_id = str(uuid.uuid4())[:8]
-    task_dir = DOWNLOADS_DIR / "_local_tasks" / task_id
-    task_dir.mkdir(parents=True, exist_ok=True)
-    media_path = task_dir / safe_name
+    if suffix in (".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi"):
+        media_dir = project_subdirs["video"]
+    elif suffix in (".mp3", ".m4a", ".wav", ".aac", ".flac", ".opus", ".ogg"):
+        media_dir = project_subdirs["audio"]
+    else:
+        media_dir = project_subdirs["source"]
+    media_path = media_dir / safe_name
     upload.save(media_path)
 
     opts = {
@@ -1326,6 +1656,10 @@ def import_local_subtitle():
         "device": request.form.get("device", "cuda"),
         "language": request.form.get("language", "en"),
         "initial_prompt": request.form.get("initial_prompt", ""),
+        "project_dir": str(project_dir),
+        "translation_dir": str(project_subdirs["translation"]),
+        "source_path": str(media_path),
+        "cleanup_parent": False,
     }
 
     with local_subtitle_lock:
@@ -1408,6 +1742,7 @@ def apply_local_subtitle_corrections():
     applied = apply_asr_corrections(session["entries"], corrections)
     with local_subtitle_lock:
         local_subtitle_sessions[session["id"]]["entries"] = session["entries"]
+    save_session_translation_artifacts(session, Path(session.get("name") or "subtitle").stem)
     payload = local_session_payload(get_local_session(session["id"]))
     payload["applied"] = applied
     return jsonify(payload)
@@ -1454,18 +1789,27 @@ def export_local_subtitle():
     output_mode = data.get("output_mode", "bilingual")
     order = data.get("order", "en_top")
     bilingual = output_mode == "bilingual"
-    output_text = entries_to_srt(session["entries"], bilingual=bilingual, order=order)
+    if output_mode == "en":
+        export_entries = [{**e, "translation": ""} for e in session["entries"]]
+        output_text = entries_to_srt(export_entries, bilingual=False, order=order)
+    elif output_mode == "zh":
+        export_entries = [{**e, "source": e.get("translation", ""), "translation": ""} for e in session["entries"]]
+        output_text = entries_to_srt(export_entries, bilingual=False, order=order)
+    else:
+        output_text = entries_to_srt(session["entries"], bilingual=bilingual, order=order)
     if not output_text.strip():
         return jsonify({"error": "没有可导出的字幕内容"}), 400
 
     stem = sanitize_filename(Path(session.get("name") or "local_subtitle").stem)
-    suffix = "bilingual" if bilingual else "zh"
+    suffix = output_mode if output_mode in ("en", "zh") else "bilingual"
     if bilingual:
         suffix += ".zh-top" if order == "zh_top" else ".en-top"
     output_name = f"{stem}.local.{suffix}.srt"
-    output_path = DOWNLOADS_DIR / output_name
+    output_dir = Path(session.get("translation_dir") or DOWNLOADS_DIR)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / output_name
     output_path.write_text(output_text, encoding="utf-8")
-    return jsonify({"file": output_name, "url": f"/files/{output_name}"})
+    return jsonify({"file": rel_download_path(output_path), "url": f"/files/{rel_download_path(output_path)}"})
 
 
 @app.route("/api/local-subtitle/start", methods=["POST"])
@@ -1476,6 +1820,10 @@ def start_local_subtitle():
     upload = request.files["file"]
     original_name = re.split(r"[\\/]", upload.filename or "local_video.mp4")[-1]
     safe_name = sanitize_filename(original_name) or f"{uuid.uuid4().hex}.mp4"
+    suffix = Path(safe_name).suffix.lower()
+    project_title = request.form.get("project_title", "").strip() or Path(original_name).stem or "local_video"
+    project_dir, project_subdirs = ensure_project_dirs(project_title)
+    write_project_notes(project_dir, project_subdirs, {"title": project_title}, "", "")
 
     api_url = request.form.get("api_url", "").strip()
     api_key = request.form.get("api_key", "").strip()
@@ -1484,9 +1832,13 @@ def start_local_subtitle():
         return jsonify({"error": "请先填写 AI 设置里的 API 地址、Key 和模型"}), 400
 
     task_id = str(uuid.uuid4())[:8]
-    task_dir = DOWNLOADS_DIR / "_local_tasks" / task_id
-    task_dir.mkdir(parents=True, exist_ok=True)
-    media_path = task_dir / safe_name
+    if suffix in (".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi"):
+        media_dir = project_subdirs["video"]
+    elif suffix in (".mp3", ".m4a", ".wav", ".aac", ".flac", ".opus", ".ogg"):
+        media_dir = project_subdirs["audio"]
+    else:
+        media_dir = project_subdirs["source"]
+    media_path = media_dir / safe_name
     upload.save(media_path)
 
     opts = {
@@ -1498,7 +1850,12 @@ def start_local_subtitle():
         "device": request.form.get("device", "cuda"),
         "language": request.form.get("language", "en"),
         "output_mode": request.form.get("output_mode", "bilingual"),
+        "order": request.form.get("order", "en_top"),
         "initial_prompt": request.form.get("initial_prompt", ""),
+        "project_dir": str(project_dir),
+        "translation_dir": str(project_subdirs["translation"]),
+        "source_path": str(media_path),
+        "cleanup_parent": False,
     }
 
     with local_subtitle_lock:
@@ -1742,10 +2099,14 @@ def download_thumbnail():
 
 @app.route("/api/delete/<filename>", methods=["DELETE"])
 def delete_file(filename):
-    filepath = DOWNLOADS_DIR / filename
+    filepath = (DOWNLOADS_DIR / filename).resolve()
+    try:
+        filepath.relative_to(DOWNLOADS_DIR.resolve())
+    except Exception:
+        return jsonify({"error": "Invalid file path"}), 400
     if filepath.exists() and filepath.is_file():
         base = filepath.stem
-        for f in DOWNLOADS_DIR.iterdir():
+        for f in filepath.parent.iterdir():
             if f.stem == base or f.stem.startswith(base + "."):
                 f.unlink(missing_ok=True)
         return jsonify({"ok": True})
