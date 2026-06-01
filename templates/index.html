@@ -121,6 +121,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .clip-tools-title{font-size:13px;font-weight:700;color:var(--text)}
 .clip-upload{display:grid;grid-template-columns:minmax(190px,1fr) auto;gap:8px;margin-bottom:10px;align-items:center}
 .clip-upload input{width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;outline:none}
+.clip-import-input{display:none}
 .clip-list{display:flex;flex-direction:column;gap:8px}
 .clip-row{display:grid;grid-template-columns:minmax(120px,1fr) 120px 120px auto;gap:8px;align-items:center}
 .clip-row input{width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;outline:none}
@@ -452,6 +453,24 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
       <input class="wide" type="text" id="volcAudioUrl" placeholder="标准版需要公网音频 URL；极速版留空" title="标准版音频 URL">
     </div>
     <textarea id="localSubPrompt" class="local-sub-prompt" placeholder="可选：填写视频背景、术语、人名或产品名，大模型会用它纠正识别错误并统一翻译"></textarea>
+    <div class="opt-row" style="margin-top:12px;gap:10px">
+      <div class="opt-group" style="min-width:130px">
+        <label>字幕对比翻译</label>
+        <label class="toggle"><input type="checkbox" id="compareTranslateToggle" onchange="toggleCompareTranslate()"><span class="slider"></span></label>
+      </div>
+      <div class="opt-group compare-opt" style="flex:1;min-width:200px;display:none">
+        <label>对比 API 地址</label>
+        <input type="text" id="compareApiUrl" style="flex:1;padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;outline:none;width:100%" placeholder="https://api.openai.com/v1">
+      </div>
+      <div class="opt-group compare-opt" style="flex:1;min-width:160px;display:none">
+        <label>对比 API Key</label>
+        <input type="password" id="compareApiKey" style="flex:1;padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;outline:none;width:100%" placeholder="另一套翻译 Key">
+      </div>
+      <div class="opt-group compare-opt" style="min-width:140px;display:none">
+        <label>对比模型</label>
+        <input type="text" id="compareModel" style="padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;outline:none;width:120px" placeholder="另一个模型">
+      </div>
+    </div>
     <div class="local-workbench-actions">
       <button class="btn btn-secondary" onclick="mergeLocalShortSentences()" title="把过短、间隔很近的字幕合并，减少一闪而过的碎字幕。">合并短句</button>
       <button class="btn btn-secondary" onclick="splitLocalLongSentences()" title="把过长字幕按标点、连接词和语义边界拆成更适合观看的多条字幕。">智能分段</button>
@@ -478,7 +497,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
           <button class="btn btn-secondary" onclick="addClipRow()" title="新增一个切片时间段输入行。">添加分段</button>
+          <button class="btn btn-secondary" onclick="document.getElementById('clipImportFile').click()" title="导入文本文件，每行格式：00:00:00-00:02:00（标题），会自动填入切片标题和时间。">导入分段</button>
           <button class="btn btn-primary" onclick="exportLocalClips()" title="按下方所有时间段导出多个 MP4 切片，并同步生成对应 SRT。">导出切片</button>
+          <input class="clip-import-input" type="file" id="clipImportFile" accept=".txt,.md,.csv" onchange="importClipSegmentsFile(event)">
         </div>
       </div>
       <div class="clip-upload">
@@ -510,24 +531,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
         <input type="text" id="aiModel" style="padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;outline:none;width:120px" placeholder="gpt-4o-mini">
       </div>
       <button class="btn btn-secondary" id="testAiApiBtn" style="align-self:end;padding:7px 14px;font-size:12px" onclick="testAiApi()" title="用当前翻译 API 地址、Key 和模型发一次小请求，确认配置可用。">测试翻译 API</button>
-    </div>
-    <div class="opt-row" style="margin-bottom:14px;gap:10px">
-      <div class="opt-group" style="min-width:130px">
-        <label>对比翻译</label>
-        <label class="toggle"><input type="checkbox" id="compareTranslateToggle" onchange="toggleCompareTranslate()"><span class="slider"></span></label>
-      </div>
-      <div class="opt-group compare-opt" style="flex:1;min-width:200px;display:none">
-        <label>对比 API 地址</label>
-        <input type="text" id="compareApiUrl" style="flex:1;padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;outline:none;width:100%" placeholder="https://api.openai.com/v1">
-      </div>
-      <div class="opt-group compare-opt" style="flex:1;min-width:160px;display:none">
-        <label>对比 API Key</label>
-        <input type="password" id="compareApiKey" style="flex:1;padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;outline:none;width:100%" placeholder="另一套翻译 Key">
-      </div>
-      <div class="opt-group compare-opt" style="min-width:140px;display:none">
-        <label>对比模型</label>
-        <input type="text" id="compareModel" style="padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;outline:none;width:120px" placeholder="另一个模型">
-      </div>
     </div>
 
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
@@ -1290,9 +1293,10 @@ async function pollLocalTask(taskId, done){
             localSessionId = d.session_id;
             await loadLocalSession();
           }
-          if(d.url){
+          if(d.url || d.zip_url){
             const link = document.getElementById('localSubDownload');
-            link.href = d.url;
+            link.href = d.zip_url || d.url;
+            link.textContent = d.zip_url ? '下载字幕ZIP' : '下载字幕';
             link.style.display = '';
           }
           if(done) done(d);
@@ -1484,7 +1488,8 @@ async function exportLocalSubtitle(){
     const data = await res.json();
     if(data.error) throw new Error(data.error);
     const link = document.getElementById('localSubDownload');
-    link.href = data.url;
+    link.href = data.zip_url || data.url;
+    link.textContent = data.zip_url ? '下载字幕ZIP' : '下载字幕';
     link.style.display = '';
     setLocalStatus(100, '字幕已导出：' + data.file);
     showToast('字幕已导出');
@@ -1511,6 +1516,79 @@ function removeClipRow(id){
   const row = document.querySelector(`[data-clip-row="${id}"]`);
   if(row) row.remove();
   if(!document.querySelector('[data-clip-row]')) addClipRow();
+}
+
+function normalizeClipTimeValue(value){
+  return (value || '')
+    .replace(/[：]/g, ':')
+    .replace(/[，]/g, ',')
+    .trim();
+}
+
+function parseClipSegmentLine(line, index){
+  const raw = (line || '').replace(/^\ufeff/, '').trim();
+  if(!raw || raw.startsWith('#') || raw.startsWith('//')) return null;
+  const timePattern = String.raw`\d{1,3}[：:]\d{1,2}(?:[：:]\d{1,2}(?:[\.,，]\d{1,3})?)?|\d+(?:[\.,，]\d+)?`;
+  const re = new RegExp(`^\\s*(${timePattern})\\s*(?:-|–|—|－|~|～|至|到)\\s*(${timePattern})\\s*(.*?)\\s*$`);
+  const match = raw.match(re);
+  if(!match) return { error: true, line: index, text: raw };
+
+  let title = (match[3] || '').trim();
+  title = title.replace(/^[（(【\[]\s*/, '').replace(/\s*[）)】\]]$/, '').trim();
+  if(!title){
+    title = `clip_${String(index).padStart(2, '0')}`;
+  }
+  return {
+    title,
+    start: normalizeClipTimeValue(match[1]),
+    end: normalizeClipTimeValue(match[2])
+  };
+}
+
+function importClipSegmentsText(text){
+  const lines = (text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+  const clips = [];
+  const errors = [];
+  lines.forEach((line, i) => {
+    const parsed = parseClipSegmentLine(line, i + 1);
+    if(!parsed) return;
+    if(parsed.error){
+      errors.push(parsed.line);
+      return;
+    }
+    clips.push(parsed);
+  });
+
+  if(!clips.length){
+    showToast('没有解析到切片，请确认格式为 00:00:00-00:00:00（标题）');
+    return;
+  }
+
+  const list = document.getElementById('clipList');
+  list.innerHTML = '';
+  clipRowSeq = 0;
+  clips.forEach(clip => addClipRow(clip));
+  const msg = errors.length
+    ? `已导入 ${clips.length} 个切片，跳过第 ${errors.slice(0, 6).join('、')} 行`
+    : `已导入 ${clips.length} 个切片`;
+  showToast(msg);
+  setLocalStatus(100, msg);
+}
+
+function importClipSegmentsFile(event){
+  const input = event.target;
+  const file = input.files && input.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    importClipSegmentsText(reader.result || '');
+    input.value = '';
+  };
+  reader.onerror = () => {
+    showToast('切片分段文件读取失败');
+    input.value = '';
+  };
+  reader.readAsText(file, 'utf-8');
 }
 
 function collectClipRows(){
@@ -1614,9 +1692,11 @@ async function startLocalSubtitle(){
     const data = await res.json();
     if(data.error) throw new Error(data.error);
     await pollLocalTask(data.task_id, d => {
-      if(d.url){
-        document.getElementById('localSubDownload').href = d.url;
-        document.getElementById('localSubDownload').style.display = '';
+      if(d.url || d.zip_url){
+        const link = document.getElementById('localSubDownload');
+        link.href = d.zip_url || d.url;
+        link.textContent = d.zip_url ? '下载字幕ZIP' : '下载字幕';
+        link.style.display = '';
       }
       showToast('一键字幕已生成');
       loadFiles();
@@ -1676,6 +1756,7 @@ async function clearAll(){
     document.getElementById('localPreview').innerHTML = '<div class="empty">先选择本地视频、音频或 SRT 文件</div>';
     document.getElementById('localSuggestions').style.display = 'none';
     document.getElementById('localSubDownload').style.display = 'none';
+    document.getElementById('localSubDownload').textContent = '下载字幕';
     setLocalStatus(100, `已清空 ${data.removed || 0} 项`);
     showToast('已清空');
     loadFiles();

@@ -14,6 +14,7 @@ import urllib.error
 import urllib.request
 import uuid
 import winreg
+import zipfile
 from pathlib import Path
 
 from flask import (
@@ -75,6 +76,33 @@ def rel_download_path(path):
         return str(Path(path).resolve().relative_to(DOWNLOADS_DIR.resolve())).replace("\\", "/")
     except Exception:
         return Path(path).name
+
+
+def make_download_zip(path):
+    path = Path(path)
+    if not path.exists() or not path.is_file():
+        return None
+    zip_path = path.with_suffix(path.suffix + ".zip")
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.write(path, arcname=path.name)
+    return zip_path
+
+
+def file_download_payload(path, prefer_zip=False):
+    path = Path(path)
+    file_rel = rel_download_path(path)
+    payload = {
+        "file": file_rel,
+        "url": f"/files/{file_rel}",
+    }
+    if prefer_zip:
+        zip_path = make_download_zip(path)
+        if zip_path:
+            zip_rel = rel_download_path(zip_path)
+            payload["zip_file"] = zip_rel
+            payload["zip_url"] = f"/files/{zip_rel}"
+            payload["url"] = payload["zip_url"]
+    return payload
 
 
 def path_download_info(path):
@@ -2228,8 +2256,7 @@ def run_local_subtitle_task(task_id, media_path, original_name, opts):
             status="completed",
             progress=100,
             message=f"完成：{len(entries)} 条字幕，合并 {merged_count} 处，智能分段 {split_count} 处，应用 {applied} 处校正",
-            file=rel_download_path(output_path),
-            url=f"/files/{rel_download_path(output_path)}",
+            **file_download_payload(output_path, prefer_zip=True),
             corrections=corrections,
             segments=len(entries),
             session_id=session_id,
@@ -2901,7 +2928,7 @@ def export_local_subtitle():
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / output_name
     output_path.write_text(output_text, encoding="utf-8")
-    return jsonify({"file": rel_download_path(output_path), "url": f"/files/{rel_download_path(output_path)}"})
+    return jsonify(file_download_payload(output_path, prefer_zip=True))
 
 
 @app.route("/api/local-subtitle/clips", methods=["POST"])
