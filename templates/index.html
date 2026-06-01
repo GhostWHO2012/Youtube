@@ -19,7 +19,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .header h1 span{color:var(--accent)}
 .header p{color:var(--text2);font-size:14px}
 
-.card{background:var(--surface);border-radius:16px;padding:24px;margin-bottom:20px;border:1px solid var(--border)}
+.card{background:var(--surface);border-radius:16px;padding:24px;margin-bottom:20px;border:1px solid var(--border);overflow:hidden}
 .card-title{font-size:13px;font-weight:600;color:var(--text2);margin-bottom:14px;text-transform:uppercase;letter-spacing:.5px}
 
 .url-row{display:flex;gap:10px;margin-bottom:16px}
@@ -39,6 +39,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .opt-group label{white-space:nowrap}
 .opt-group select{padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;outline:none}
 .opt-group select:focus{border-color:var(--accent)}
+.content-checks{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.check-pill{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:13px;cursor:pointer;user-select:none}
+.check-pill input{accent-color:var(--accent);cursor:pointer}
+.check-pill:has(input:checked){border-color:rgba(255,71,87,.7);background:rgba(255,71,87,.12)}
 .toggle{position:relative;width:40px;height:22px;display:inline-block}
 .toggle input{opacity:0;width:0;height:0}
 .toggle .slider{position:absolute;inset:0;background:var(--border);border-radius:22px;cursor:pointer;transition:.3s}
@@ -47,11 +51,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .toggle input:checked+.slider:before{transform:translateX(18px)}
 
 /* Subtitle panel */
-.sub-panel{margin-top:16px;padding-top:16px;border-top:1px solid var(--border);display:none}
+.sub-panel{margin-top:16px;padding-top:16px;border-top:1px solid var(--border);display:none;max-width:100%;overflow:hidden}
 .sub-panel.active{display:block}
-.sub-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px 20px}
+.sub-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(150px,220px);gap:12px 20px;min-width:0}
 .sub-grid .full{grid-column:1/-1}
-.sub-preview-wrap{margin-bottom:14px}
+.sub-preview-wrap{margin-bottom:14px;max-width:100%}
 .sub-preview{position:relative;width:100%;aspect-ratio:16/9;background:linear-gradient(135deg,#1a1a2e,#16213e,#0f3460);border-radius:12px;overflow:hidden;cursor:default;user-select:none}
 .sub-preview-bg{position:absolute;inset:0;background-size:cover;background-position:center;filter:brightness(.6)}
 .sub-preview-text{position:absolute;left:50%;transform:translateX(-50%);text-align:center;pointer-events:auto;cursor:ns-resize;padding:4px 12px;white-space:nowrap;transition:top .15s}
@@ -61,16 +65,19 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .sub-pos-btn{width:22px;height:22px;border-radius:4px;border:1px solid var(--border);background:transparent;color:var(--text2);font-size:10px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s;padding:0}
 .sub-pos-btn:hover{border-color:var(--accent);color:var(--accent)}
 .sub-pos-btn.active{background:var(--accent);color:#fff;border-color:var(--accent)}
-.sub-settings-row{display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap}
-.sub-settings-row .sub-grid{flex:1;min-width:280px}
-.sub-settings-row .sub-side{display:flex;flex-direction:column;gap:10px;align-items:center;min-width:100px}
+.sub-settings-row{display:grid;grid-template-columns:minmax(0,1fr) 88px;gap:16px;align-items:start;min-width:0}
+.sub-settings-row .sub-grid{width:100%;min-width:0}
+.sub-settings-row .sub-grid .opt-group{min-width:0}
+.sub-settings-row .sub-grid .opt-group>select{flex:1;width:auto;max-width:100%;min-width:0}
+.sub-settings-row .sub-side{display:flex;flex-direction:column;gap:10px;align-items:center;width:88px;min-width:0}
+#subFont{flex:1;width:auto;min-width:0}
 .color-row{display:flex;align-items:center;gap:8px}
 .color-row input[type="color"]{width:32px;height:32px;border:1px solid var(--border);border-radius:8px;background:none;cursor:pointer;padding:2px}
 .color-row input[type="color"]::-webkit-color-swatch{border-radius:5px;border:none}
 .color-row input[type="color"]::-webkit-color-swatch-wrapper{padding:0}
 .hint{font-size:11px;color:var(--text2);margin-top:10px;line-height:1.5}
 .sub-preview-bg-box{position:absolute;z-index:-1;pointer-events:none;border-radius:4px}
-.bg-section{margin-top:14px;padding-top:14px;border-top:1px solid var(--border)}
+.bg-section{margin-top:14px;padding-top:14px;border-top:1px solid var(--border);max-width:100%;min-width:0}
 .bg-section .bg-title{font-size:12px;font-weight:600;color:var(--text2)}
 .bg-row{display:flex;align-items:center;gap:6px;margin-bottom:8px;font-size:12px;color:var(--text2)}
 .bg-row label{min-width:48px;white-space:nowrap;flex-shrink:0}
@@ -86,10 +93,14 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .bg-row input[type="color"]::-webkit-color-swatch{border-radius:4px;border:none}
 .bg-row input[type="color"]::-webkit-color-swatch-wrapper{padding:0}
 
-.local-sub-grid{display:grid;grid-template-columns:minmax(180px,1.2fr) minmax(160px,.8fr) repeat(3,120px) auto;gap:10px;align-items:center}
+.local-sub-grid{display:grid;grid-template-columns:minmax(180px,1.2fr) minmax(160px,.8fr) repeat(4,minmax(110px,.55fr)) auto;gap:10px;align-items:center}
 .local-file input{width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px}
 .local-project-title{width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;outline:none}
 .local-sub-grid select{padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;outline:none}
+.local-asr-settings{display:grid;grid-template-columns:minmax(190px,1fr) minmax(170px,.8fr) minmax(95px,.35fr) minmax(220px,1.1fr);gap:10px;margin-top:10px;align-items:center}
+.local-asr-settings input{width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;outline:none}
+.local-asr-settings input:focus{border-color:var(--accent)}
+.local-api-note{grid-column:1/-1;font-size:12px;color:var(--text2);line-height:1.45}
 .local-sub-prompt{width:100%;min-height:72px;margin-top:12px;padding:10px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;line-height:1.45;resize:vertical;outline:none}
 .local-sub-prompt:focus,.local-sub-grid select:focus,.local-file input:focus,.local-project-title:focus{border-color:var(--accent)}
 .local-sub-status{margin-top:12px}
@@ -104,6 +115,16 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .local-preview-row .time{color:var(--blue);font-variant-numeric:tabular-nums}
 .local-preview-row .src{color:var(--text);line-height:1.45;word-break:break-word}
 .local-preview-row .zh{color:var(--green);line-height:1.45;word-break:break-word}
+.local-preview-row .cmp{grid-column:4/5;color:#f8d37b;line-height:1.45;word-break:break-word}
+.clip-tools{margin-top:12px;padding:12px;border:1px solid var(--border);border-radius:8px;background:rgba(255,255,255,.03)}
+.clip-tools-head{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:10px}
+.clip-tools-title{font-size:13px;font-weight:700;color:var(--text)}
+.clip-upload{display:grid;grid-template-columns:minmax(190px,1fr) auto;gap:8px;margin-bottom:10px;align-items:center}
+.clip-upload input{width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;outline:none}
+.clip-list{display:flex;flex-direction:column;gap:8px}
+.clip-row{display:grid;grid-template-columns:minmax(120px,1fr) 120px 120px auto;gap:8px;align-items:center}
+.clip-row input{width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;outline:none}
+.clip-row input:focus{border-color:var(--accent)}
 .local-suggestions{margin-top:12px;border:1px solid var(--border);border-radius:8px;background:var(--bg);padding:10px;max-height:220px;overflow:auto}
 .local-sugg{display:grid;grid-template-columns:22px minmax(0,1fr);gap:8px;padding:7px 0;border-top:1px solid var(--border);font-size:12px}
 .local-sugg:first-child{border-top:0}
@@ -112,8 +133,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .local-sugg-fields{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px}
 .local-sugg-fields input,.local-sugg textarea{width:100%;padding:7px 8px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:12px;outline:none}
 .local-sugg textarea{grid-column:1/-1;min-height:44px;resize:vertical;color:var(--text2)}
-@media(max-width:820px){.local-sub-grid{grid-template-columns:1fr 1fr}.local-file{grid-column:1/-1}.local-sub-grid .btn{grid-column:1/-1}}
-@media(max-width:760px){.local-preview-row{grid-template-columns:42px 1fr}.local-preview-row .src,.local-preview-row .zh{grid-column:1/-1}}
+@media(max-width:820px){.local-sub-grid,.local-asr-settings{grid-template-columns:1fr 1fr}.local-file{grid-column:1/-1}.local-sub-grid .btn{grid-column:1/-1}.local-asr-settings .wide{grid-column:1/-1}}
+@media(max-width:760px){.local-preview-row{grid-template-columns:42px 1fr}.local-preview-row .src,.local-preview-row .zh,.local-preview-row .cmp{grid-column:1/-1}.clip-upload{grid-template-columns:1fr}.clip-row{grid-template-columns:1fr 1fr}.clip-row .clip-title{grid-column:1/-1}.clip-row .danger{grid-column:1/-1}}
 
 /* Format panel */
 .format-panel{display:none}
@@ -182,7 +203,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
   .url-row{flex-direction:column}
   .opt-row{flex-direction:column;align-items:flex-start}
   .sub-grid{grid-template-columns:1fr}
-  .sub-settings-row{flex-direction:column}
+  .sub-settings-row{grid-template-columns:1fr}
   .sub-settings-row .sub-side{flex-direction:row;width:100%;justify-content:center}
   .fmt-table{font-size:11px}
   .fmt-table th,.fmt-table td{padding:5px 6px}
@@ -202,18 +223,21 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
   <div class="card">
     <div class="url-row">
       <input type="text" id="urlInput" placeholder="粘贴 YouTube 视频链接..." autocomplete="off">
-      <button class="btn btn-secondary" id="fmtBtn" onclick="queryFormats()">查看格式</button>
-      <button class="btn btn-secondary" id="thumbBtn" onclick="downloadThumbnail()">封面</button>
-      <button class="btn btn-primary" id="dlBtn" onclick="startDownload()">下载</button>
+        <button class="btn btn-secondary" id="fmtBtn" onclick="queryFormats()" title="查询当前链接可用的视频、音频和合并格式，适合手动选择清晰度。">查看格式</button>
+        <button class="btn btn-secondary" id="thumbBtn" onclick="downloadThumbnail()" title="只下载当前视频封面，不下载视频或音频。">封面</button>
+        <button class="btn btn-primary" id="dlBtn" onclick="startDownload()" title="按上方勾选内容下载视频、音频、封面、简介和链接标题。">下载</button>
     </div>
 
     <div class="opt-row">
-      <div class="opt-group">
-        <label>类型</label>
-        <select id="typeSelect" onchange="toggleType()">
-          <option value="video">视频 (MP4)</option>
-          <option value="audio">音频 (MP3)</option>
-        </select>
+      <div class="opt-group" style="align-items:flex-start">
+        <label style="padding-top:7px">下载内容</label>
+        <div class="content-checks" id="downloadContentGroup">
+          <label class="check-pill"><input type="checkbox" id="downloadVideo" onchange="toggleType()" checked>视频</label>
+          <label class="check-pill"><input type="checkbox" id="downloadAudio" onchange="toggleType()" checked>音频</label>
+          <label class="check-pill"><input type="checkbox" id="downloadCover" checked>封面</label>
+          <label class="check-pill"><input type="checkbox" id="downloadDescription" checked>简介</label>
+          <label class="check-pill"><input type="checkbox" id="downloadLinkTitle" checked>链接标题</label>
+        </div>
       </div>
       <div class="opt-group video-opt" id="qualityGroup">
         <label>画质</label>
@@ -223,6 +247,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
           <option value="1080" selected>1080p</option>
           <option value="720">720p</option>
           <option value="480">480p</option>
+        </select>
+      </div>
+      <div class="opt-group video-opt" id="videoFormatGroup">
+        <label>视频格式</label>
+        <select id="videoFormat">
+          <option value="mp4" selected>MP4</option>
         </select>
       </div>
       <div class="opt-group video-opt" id="codecGroup">
@@ -235,11 +265,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
         </select>
       </div>
       <div class="opt-group" id="audioGroup" style="display:none">
-        <label>格式</label>
+        <label>音频格式</label>
         <select id="audioFormat">
           <option value="mp3">MP3</option>
-          <option value="m4a">M4A</option>
-          <option value="opus">OPUS</option>
         </select>
       </div>
       <div class="opt-group video-opt" id="aeGroup">
@@ -267,7 +295,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
       </div>
       <div class="fmt-table-wrap" id="fmtTableWrap"></div>
       <div class="fmt-actions">
-        <button class="btn btn-primary" onclick="downloadSelected()">下载选中格式</button>
+        <button class="btn btn-primary" onclick="downloadSelected()" title="下载格式表里当前选中的视频/音频组合。">下载选中格式</button>
         <span class="info" id="fmtSelectionInfo">请先选择视频和音频格式</span>
       </div>
     </div>
@@ -324,7 +352,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
           <div class="full bg-section">
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
               <span class="bg-title">字幕背景</span>
-              <label class="toggle"><input type="checkbox" id="bgEnabled" onchange="updateSubPreview()"><span class="slider"></span></label>
+              <label class="toggle"><input type="checkbox" id="bgEnabled" onchange="updateSubPreview()" checked><span class="slider"></span></label>
             </div>
             <div class="bg-row">
               <label>颜色</label>
@@ -334,8 +362,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
             </div>
             <div class="bg-row">
               <label>圆角</label>
-              <input type="range" id="bgRadius" min="0" max="100" value="0" oninput="syncFromSlider('bgRadius');updateSubPreview()">
-              <input type="number" class="bg-num" id="bgRadiusNum" min="0" max="100" value="0" oninput="syncToSlider('bgRadius');updateSubPreview()"><span class="bg-pct">%</span>
+              <input type="range" id="bgRadius" min="0" max="100" value="30" oninput="syncFromSlider('bgRadius');updateSubPreview()">
+              <input type="number" class="bg-num" id="bgRadiusNum" min="0" max="100" value="30" oninput="syncToSlider('bgRadius');updateSubPreview()"><span class="bg-pct">%</span>
             </div>
             <div class="bg-row">
               <label>高度</label>
@@ -366,7 +394,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
           </div>
           <div class="opt-group full">
             <label>自动翻译中文</label>
-            <label class="toggle"><input type="checkbox" id="translateSub" onchange="toggleTranslateHint()"><span class="slider"></span></label>
+            <label class="toggle"><input type="checkbox" id="translateSub" onchange="toggleTranslateHint()" checked><span class="slider"></span></label>
             <span style="font-size:11px;color:var(--text2);margin-left:8px" id="translateHint">无中文字幕时用 AI 翻译（需先配置 AI 设置）</span>
           </div>
         </div>
@@ -392,12 +420,16 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 
   <!-- Local Subtitle Translation -->
   <div class="card video-opt" id="localSubCard">
-    <div class="card-title">本地字幕工作台</div>
+    <div class="card-title">在线字幕工作台</div>
     <div class="local-sub-grid">
       <div class="local-file">
         <input type="file" id="localVideoFile" accept="video/*,audio/*,.srt">
       </div>
       <input class="local-project-title" type="text" id="localProjectTitle" placeholder="项目/视频标题（留空用文件名）" title="项目标题">
+      <select id="localAsrProvider" title="识别方式" onchange="toggleLocalAsrProvider()">
+        <option value="volc_flash" selected>火山极速版</option>
+        <option value="volc_standard_url">火山标准版 URL</option>
+      </select>
       <select id="localSubLang" title="识别语言">
         <option value="en" selected>英文识别</option>
         <option value="auto">自动识别</option>
@@ -405,55 +437,96 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
         <option value="ja">日文识别</option>
         <option value="ko">韩文识别</option>
       </select>
-      <select id="localSubDevice" title="识别设备">
-        <option value="cuda" selected>CUDA</option>
-        <option value="cpu">CPU</option>
-      </select>
       <select id="localSubOutput" title="导出格式">
         <option value="bilingual" selected>双语 SRT</option>
         <option value="en">仅英文 SRT</option>
         <option value="zh">仅中文 SRT</option>
       </select>
-      <button class="btn btn-primary" id="localImportBtn" onclick="importLocalSubtitle()">读取/分析</button>
+      <button class="btn btn-primary" id="localImportBtn" onclick="importLocalSubtitle()" title="读取本地视频、音频或 SRT；音视频会先识别成英文字幕，SRT 会直接进入预览。">读取/分析</button>
+    </div>
+    <div class="local-asr-settings" id="volcAsrSettings">
+      <div class="local-api-note">识别 API 设置：这里只填火山语音识别 Key，用来把音频转成英文字幕，不负责翻译。</div>
+      <input type="password" id="volcApiKey" placeholder="火山 API Key（只保存在本机浏览器）" title="火山 API Key">
+      <input type="text" id="volcResourceId" placeholder="volc.bigasr.auc_turbo" title="Resource ID">
+      <input type="number" id="volcSegmentMinutes" min="5" max="60" value="25" title="自动分段分钟数">
+      <input class="wide" type="text" id="volcAudioUrl" placeholder="标准版需要公网音频 URL；极速版留空" title="标准版音频 URL">
     </div>
     <textarea id="localSubPrompt" class="local-sub-prompt" placeholder="可选：填写视频背景、术语、人名或产品名，大模型会用它纠正识别错误并统一翻译"></textarea>
     <div class="local-workbench-actions">
-      <button class="btn btn-secondary" onclick="mergeLocalShortSentences()">合并短句</button>
-      <button class="btn btn-secondary" onclick="checkLocalWords()">AI 检查单词</button>
-      <button class="btn btn-secondary" onclick="applyLocalCorrections()">应用校正</button>
-      <button class="btn btn-secondary" onclick="translateLocalSubtitle()">翻译</button>
+      <button class="btn btn-secondary" onclick="mergeLocalShortSentences()" title="把过短、间隔很近的字幕合并，减少一闪而过的碎字幕。">合并短句</button>
+      <button class="btn btn-secondary" onclick="splitLocalLongSentences()" title="把过长字幕按标点、连接词和语义边界拆成更适合观看的多条字幕。">智能分段</button>
+      <button class="btn btn-secondary" onclick="checkLocalWords()" title="使用下方翻译 API 检查英文识别里的术语、人名、公司名和大小写错误。">AI 检查单词</button>
+      <button class="btn btn-secondary" onclick="applyLocalCorrections()" title="应用上方 AI 检查列表里勾选并可手动修改的校正建议。">应用校正</button>
+      <button class="btn btn-secondary" onclick="translateLocalSubtitle()" title="使用下方翻译 API 把当前英文字幕翻译成中文，并保留英文原文。">翻译</button>
       <select id="localSubOrder" title="双语顺序">
         <option value="en_top" selected>英文在上</option>
         <option value="zh_top">中文在上</option>
       </select>
-      <button class="btn btn-primary" onclick="exportLocalSubtitle()">导出字幕</button>
-      <button class="btn btn-secondary" id="localOneclickBtn" onclick="startLocalSubtitle()">一键生成</button>
+      <button class="btn btn-primary" onclick="exportLocalSubtitle()" title="按当前导出格式和双语顺序，导出英文、中文或双语 SRT。">导出字幕</button>
+      <button class="btn btn-secondary" id="localOneclickBtn" onclick="startLocalSubtitle()" title="自动完成：识别音视频、保存 raw_en、合并短句、智能分段、AI 检查单词、应用校正、翻译中文、导出所选字幕。">一键生成</button>
     </div>
     <div class="local-sub-status" id="localSubStatus" style="display:none">
       <div class="progress-bar-bg"><div class="progress-bar-fill" id="localSubFill"></div></div>
       <div class="progress-msg" id="localSubMsg">准备中...</div>
-      <a class="btn-sm" id="localSubDownload" href="#" style="display:none">下载字幕</a>
+      <a class="btn-sm" id="localSubDownload" href="#" style="display:none" title="下载刚刚导出的字幕文件。">下载字幕</a>
+    </div>
+    <div class="clip-tools">
+      <div class="clip-tools-head">
+        <div>
+          <div class="clip-tools-title">视频切片</div>
+          <div class="hint" style="margin-top:2px">粘贴本地视频路径，只引用原文件不复制；切片会输出到原视频同目录的新文件夹。</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
+          <button class="btn btn-secondary" onclick="addClipRow()" title="新增一个切片时间段输入行。">添加分段</button>
+          <button class="btn btn-primary" onclick="exportLocalClips()" title="按下方所有时间段导出多个 MP4 切片，并同步生成对应 SRT。">导出切片</button>
+        </div>
+      </div>
+      <div class="clip-upload">
+        <input type="text" id="clipVideoPath" placeholder="粘贴本地视频完整路径，例如 N:\Videos\source.mp4" title="本地视频完整路径。这里不会复制源视频，只记录路径。">
+        <button class="btn btn-secondary" onclick="setClipSourcePath()" title="引用这个本地视频路径作为切片来源，不复制源视频。">使用路径</button>
+      </div>
+      <div class="clip-list" id="clipList"></div>
     </div>
     <div class="local-suggestions" id="localSuggestions" style="display:none"></div>
     <div class="local-preview" id="localPreview"><div class="empty">先选择本地视频、音频或 SRT 文件</div></div>
-    <div class="hint">读取本地音频/视频/SRT 后，会按项目标题保存到 downloads/projects/视频标题，并把 raw_en、corrected_en、zh、双语字幕放进 10_translation。AI 检查结果可逐条手动修改，再一键应用校正。</div>
+    <div class="hint">读取本地音频/视频/SRT 后，会按项目标题保存到 downloads/projects/视频标题。音视频只使用在线识别 API 生成 raw_en，再把 split_en、corrected_en、zh、双语字幕放进 10_translation。“一键生成”会自动执行在线识别、合并短句、智能分段、AI 检查、应用校正、翻译和导出。</div>
   </div>
 
   <!-- AI Description -->
   <div class="card" id="aiDescCard">
-    <div class="card-title">AI 视频简介</div>
+    <div class="card-title">AI 翻译/简介设置</div>
+    <div class="hint" style="margin-bottom:10px">翻译 API 设置：这里填聊天/翻译大模型 Key，用于 AI 检查单词、校正英文、翻译中文。不要填火山语音识别 Key。</div>
     <div class="opt-row" style="margin-bottom:14px;gap:10px">
       <div class="opt-group" style="flex:1;min-width:200px">
-        <label>API 地址</label>
+        <label>翻译 API 地址</label>
         <input type="text" id="aiApiUrl" style="flex:1;padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;outline:none;width:100%" placeholder="https://api.openai.com/v1">
       </div>
       <div class="opt-group" style="flex:1;min-width:160px">
-        <label>API Key</label>
+        <label>翻译 API Key</label>
         <input type="password" id="aiApiKey" style="flex:1;padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;outline:none;width:100%" placeholder="sk-...">
       </div>
       <div class="opt-group" style="min-width:140px">
         <label>模型</label>
         <input type="text" id="aiModel" style="padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;outline:none;width:120px" placeholder="gpt-4o-mini">
+      </div>
+      <button class="btn btn-secondary" id="testAiApiBtn" style="align-self:end;padding:7px 14px;font-size:12px" onclick="testAiApi()" title="用当前翻译 API 地址、Key 和模型发一次小请求，确认配置可用。">测试翻译 API</button>
+    </div>
+    <div class="opt-row" style="margin-bottom:14px;gap:10px">
+      <div class="opt-group" style="min-width:130px">
+        <label>对比翻译</label>
+        <label class="toggle"><input type="checkbox" id="compareTranslateToggle" onchange="toggleCompareTranslate()"><span class="slider"></span></label>
+      </div>
+      <div class="opt-group compare-opt" style="flex:1;min-width:200px;display:none">
+        <label>对比 API 地址</label>
+        <input type="text" id="compareApiUrl" style="flex:1;padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;outline:none;width:100%" placeholder="https://api.openai.com/v1">
+      </div>
+      <div class="opt-group compare-opt" style="flex:1;min-width:160px;display:none">
+        <label>对比 API Key</label>
+        <input type="password" id="compareApiKey" style="flex:1;padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;outline:none;width:100%" placeholder="另一套翻译 Key">
+      </div>
+      <div class="opt-group compare-opt" style="min-width:140px;display:none">
+        <label>对比模型</label>
+        <input type="text" id="compareModel" style="padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;outline:none;width:120px" placeholder="另一个模型">
       </div>
     </div>
 
@@ -462,7 +535,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
           <span style="font-size:13px;font-weight:600;color:var(--text2)">参考风格</span>
           <input type="text" id="refUrl" style="flex:1;padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;outline:none" placeholder="粘贴参考视频链接...">
-          <button class="btn btn-secondary" style="padding:5px 12px;font-size:12px" onclick="fetchRefDesc()">获取</button>
+          <button class="btn btn-secondary" style="padding:5px 12px;font-size:12px" onclick="fetchRefDesc()" title="从参考视频链接读取简介文本，用作生成风格参考。">获取</button>
         </div>
         <textarea id="refStyleText" rows="8" style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;resize:vertical;outline:none;font-family:inherit" placeholder="点击「获取」拉取参考视频简介，或直接粘贴参考文本..."></textarea>
       </div>
@@ -470,14 +543,14 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
           <span style="font-size:13px;font-weight:600;color:var(--text2)">生成简介</span>
           <input type="text" id="targetUrl" style="flex:1;padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;outline:none" placeholder="目标视频链接（默认使用上方链接）">
-          <button class="btn btn-primary" style="padding:5px 12px;font-size:12px" id="genDescBtn" onclick="generateDesc()">生成</button>
+          <button class="btn btn-primary" style="padding:5px 12px;font-size:12px" id="genDescBtn" onclick="generateDesc()" title="使用翻译/简介 API 生成视频简介，可选择包含时间轴和 B 站格式。">生成</button>
           <label style="font-size:12px;color:var(--text2);display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="includeTimeline" checked> 包含时间轴</label>
           <label style="font-size:12px;color:var(--text2);display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="bilibiliFmt"> B站格式</label>
         </div>
         <textarea id="generatedDesc" rows="8" style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;resize:vertical;outline:none;font-family:inherit" placeholder="AI 生成的简介将显示在这里..." readonly></textarea>
         <div style="margin-top:6px;display:flex;justify-content:flex-end;gap:6px">
-          <button class="btn-sm" id="saveDescBtn" style="display:none" onclick="saveGeneratedDesc()">保存文件</button>
-          <button class="btn-sm" id="copyDescBtn" style="display:none" onclick="copyGeneratedDesc()">复制</button>
+          <button class="btn-sm" id="saveDescBtn" style="display:none" onclick="saveGeneratedDesc()" title="确认简介文件已经保存到项目目录。">保存文件</button>
+          <button class="btn-sm" id="copyDescBtn" style="display:none" onclick="copyGeneratedDesc()" title="复制生成的简介文本到剪贴板。">复制</button>
         </div>
       </div>
     </div>
@@ -492,7 +565,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 
   <!-- Files -->
   <div class="files-section">
-    <h2>已下载文件 <span class="count" id="fileCount">0</span> <button class="btn btn-secondary" style="margin-left:12px;padding:5px 14px;font-size:12px" onclick="clearAll()">清空全部</button></h2>
+    <h2>已下载文件 <span class="count" id="fileCount">0</span> <button class="btn btn-secondary" style="margin-left:12px;padding:5px 14px;font-size:12px" onclick="clearAll()" title="清空下载列表里的文件记录和可删除文件。谨慎使用。">清空全部</button></h2>
     <div class="file-list" id="fileList"><div class="empty">暂无文件</div></div>
   </div>
 </div>
@@ -505,9 +578,19 @@ let selectedVideo = null;
 let selectedAudio = null;
 
 function toggleType(){
-  const isAudio = document.getElementById('typeSelect').value === 'audio';
-  document.querySelectorAll('.video-opt').forEach(el => el.style.display = isAudio ? 'none' : '');
-  document.getElementById('audioGroup').style.display = isAudio ? '' : 'none';
+  const wantsVideo = document.getElementById('downloadVideo').checked;
+  const wantsAudio = document.getElementById('downloadAudio').checked;
+  document.querySelectorAll('.video-opt').forEach(el => el.style.display = wantsVideo ? '' : 'none');
+  document.getElementById('audioGroup').style.display = wantsAudio ? '' : 'none';
+  document.getElementById('qualityGroup').style.display = wantsVideo ? '' : 'none';
+  document.getElementById('videoFormatGroup').style.display = wantsVideo ? '' : 'none';
+  document.getElementById('codecGroup').style.display = wantsVideo ? '' : 'none';
+  document.getElementById('aeGroup').style.display = wantsVideo ? '' : 'none';
+  if(!wantsVideo){
+    const subToggle = document.getElementById('dualSubToggle');
+    if(subToggle) subToggle.checked = false;
+    toggleSubPanel();
+  }
 }
 
 function toggleSubPanel(){
@@ -539,12 +622,17 @@ async function loadFonts(){
     const data = await res.json();
     if(!data.fonts) return;
     const sel = document.getElementById('subFont');
-    const defaultFont = 'Microsoft YaHei';
+    const preferredFonts = ['Microsoft YaHei', 'Microsoft YaHei UI', '微软雅黑', 'Noto Sans SC', 'Source Han Sans SC', 'SimHei', 'Arial'];
+    let selectedFont = '';
     data.fonts.forEach(f => {
       const o = document.createElement('option'); o.value = f; o.textContent = f;
-      if(f === defaultFont) o.selected = true;
+      if(!selectedFont && preferredFonts.some(name => f.toLowerCase() === name.toLowerCase())){
+        selectedFont = f;
+      }
       sel.appendChild(o);
     });
+    if(selectedFont) sel.value = selectedFont;
+    updateSubPreview();
   } catch(e) { console.warn('Failed to load fonts', e); }
 }
 
@@ -926,6 +1014,10 @@ function updateSelectionInfo(){
 function downloadSelected(){
   const url = document.getElementById('urlInput').value.trim();
   if(!url){ showToast('请输入链接'); return; }
+  if(!document.getElementById('downloadVideo').checked){
+    document.getElementById('downloadVideo').checked = true;
+    toggleType();
+  }
 
   let formatId = '';
   if(selectedVideo && selectedAudio){
@@ -953,10 +1045,25 @@ function doDownload(url, extra){
   const btn = document.getElementById('dlBtn');
   btn.disabled = true; btn.textContent = '下载中...';
 
+  const downloadItems = {
+    video: document.getElementById('downloadVideo').checked,
+    audio: document.getElementById('downloadAudio').checked,
+    cover: document.getElementById('downloadCover').checked,
+    description: document.getElementById('downloadDescription').checked,
+    link_title: document.getElementById('downloadLinkTitle').checked,
+  };
+  if(!Object.values(downloadItems).some(Boolean)){
+    showToast('请至少选择一个下载内容');
+    resetBtn();
+    return;
+  }
+
   const body = {
     url,
-    type: document.getElementById('typeSelect').value,
+    type: downloadItems.video ? 'video' : (downloadItems.audio ? 'audio' : 'metadata'),
+    download_items: downloadItems,
     quality: document.getElementById('qualitySelect').value,
+    video_format: document.getElementById('videoFormat').value,
     codec: document.getElementById('codecSelect').value,
     audio_format: document.getElementById('audioFormat').value,
     dual_subtitle: document.getElementById('dualSubToggle').checked,
@@ -984,6 +1091,13 @@ function doDownload(url, extra){
     model: document.getElementById('aiModel').value || 'gpt-4o-mini',
   };
   if(extra) Object.assign(body, extra);
+  if(body.download_items.video && body.dual_subtitle && body.sub_mode === 'zh_en' && body.translate_sub){
+    if(!String(body.api_url || '').trim() || !String(body.api_key || '').trim()){
+      showToast('请先填写 AI API 地址和 Key，才能自动翻译中文字幕');
+      resetBtn();
+      return;
+    }
+  }
 
   fetch('/api/download', {
     method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body)
@@ -1025,15 +1139,11 @@ function pollProgress(taskId){
 // ── Local subtitle translation ───────────────────────────────────
 let localSessionId = '';
 let localCorrections = [];
+let clipRowSeq = 0;
 
 async function loadLocalSubtitleCapabilities(){
   try{
-    const res = await fetch('/api/local-subtitle/capabilities');
-    const data = await res.json();
-    if(!data.cli_available){
-      const msg = document.getElementById('localSubMsg');
-      if(msg) msg.textContent = '未检测到本地识别引擎，请确认 YiMu 工具目录存在';
-    }
+    await fetch('/api/local-subtitle/capabilities');
   }catch(e){}
 }
 
@@ -1050,8 +1160,89 @@ function getLocalAiSettings(){
   const api_url = document.getElementById('aiApiUrl').value.trim();
   const api_key = document.getElementById('aiApiKey').value.trim();
   const model = document.getElementById('aiModel').value.trim() || 'gpt-4o-mini';
-  if(!api_url || !api_key || !model) throw new Error('请先填写下方 AI 设置');
+  if(!api_url || !api_key || !model) throw new Error('请先填写下方 AI 翻译设置；这里需要翻译模型 Key，不是火山识别 Key');
   return { api_url, api_key, model, prompt: document.getElementById('localSubPrompt').value };
+}
+
+function toggleCompareTranslate(){
+  const enabled = document.getElementById('compareTranslateToggle').checked;
+  document.querySelectorAll('.compare-opt').forEach(el => el.style.display = enabled ? '' : 'none');
+}
+
+function getCompareTranslateSettings(){
+  const enabled = document.getElementById('compareTranslateToggle').checked;
+  if(!enabled){
+    return { compare_enabled: false };
+  }
+  const compare_api_url = document.getElementById('compareApiUrl').value.trim();
+  const compare_api_key = document.getElementById('compareApiKey').value.trim();
+  const compare_model = document.getElementById('compareModel').value.trim();
+  if(!compare_api_url || !compare_api_key || !compare_model){
+    throw new Error('已开启对比翻译，请填写对比 API 地址、Key 和模型');
+  }
+  return { compare_enabled: true, compare_api_url, compare_api_key, compare_model };
+}
+
+async function testAiApi(){
+  let cfg;
+  try{ cfg = getLocalAiSettings(); }catch(e){ showToast(e.message); return; }
+  const btn = document.getElementById('testAiApiBtn');
+  btn.disabled = true;
+  btn.textContent = '测试中...';
+  try{
+    const res = await fetch('/api/test-chat-api', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(cfg)
+    });
+    const data = await res.json();
+    if(data.error) throw new Error(data.error);
+    showToast(data.message || '翻译 API 可用');
+  }catch(e){
+    showToast('翻译 API 测试失败: ' + e.message);
+  }finally{
+    btn.disabled = false;
+    btn.textContent = '测试翻译 API';
+  }
+}
+
+function toggleLocalAsrProvider(){
+  const providerEl = document.getElementById('localAsrProvider');
+  if(!['volc_flash','volc_standard_url'].includes(providerEl.value)){
+    providerEl.value = 'volc_flash';
+  }
+  const provider = providerEl.value;
+  const settings = document.getElementById('volcAsrSettings');
+  const url = document.getElementById('volcAudioUrl');
+  const resource = document.getElementById('volcResourceId');
+  settings.style.display = '';
+  url.style.display = provider === 'volc_standard_url' ? '' : 'none';
+  const known = ['volc.bigasr.auc_turbo', 'volc.bigasr.auc'];
+  if(!resource.value.trim() || known.includes(resource.value.trim())){
+    resource.value = provider === 'volc_standard_url' ? 'volc.bigasr.auc' : 'volc.bigasr.auc_turbo';
+  }
+}
+
+function getLocalAsrSettings(){
+  let provider = document.getElementById('localAsrProvider').value;
+  if(!['volc_flash','volc_standard_url'].includes(provider)){
+    provider = 'volc_flash';
+    document.getElementById('localAsrProvider').value = provider;
+  }
+  const cfg = {
+    asr_provider: provider,
+    volc_api_key: document.getElementById('volcApiKey').value.trim(),
+    volc_resource_id: document.getElementById('volcResourceId').value.trim(),
+    volc_audio_url: document.getElementById('volcAudioUrl').value.trim(),
+    volc_segment_minutes: document.getElementById('volcSegmentMinutes').value || '25'
+  };
+  if(!cfg.volc_api_key){
+    throw new Error('请先填写火山 API Key');
+  }
+  if(provider === 'volc_standard_url' && !cfg.volc_audio_url){
+    throw new Error('火山标准版需要填写可公网访问的音频 URL；本地文件请选择火山极速版');
+  }
+  return cfg;
 }
 
 function renderLocalSession(data){
@@ -1072,6 +1263,7 @@ function renderLocalSession(data){
       <div class="time">${escHtml(r.start)} → ${escHtml(r.end)}</div>
       <div class="src">${escHtml(r.source || '')}</div>
       <div class="zh">${escHtml(r.translation || '')}</div>
+      ${r.translation_compare ? `<div class="cmp">对比：${escHtml(r.translation_compare || '')}</div>` : ''}
     </div>
   `).join('');
 }
@@ -1123,6 +1315,10 @@ async function importLocalSubtitle(){
   const fileInput = document.getElementById('localVideoFile');
   const file = fileInput.files && fileInput.files[0];
   if(!file){ showToast('请选择本地视频或音频文件'); return; }
+  let asrCfg = { asr_provider: document.getElementById('localAsrProvider').value };
+  if(!/\.srt$/i.test(file.name || '')){
+    try{ asrCfg = getLocalAsrSettings(); }catch(e){ showToast(e.message); return; }
+  }
 
   const btn = document.getElementById('localImportBtn');
   const link = document.getElementById('localSubDownload');
@@ -1133,10 +1329,9 @@ async function importLocalSubtitle(){
   const fd = new FormData();
   fd.append('file', file);
   fd.append('language', document.getElementById('localSubLang').value);
-  fd.append('device', document.getElementById('localSubDevice').value);
-  fd.append('transcribe_model', 'large-v3');
   fd.append('initial_prompt', document.getElementById('localSubPrompt').value);
   fd.append('project_title', document.getElementById('localProjectTitle').value);
+  Object.entries(asrCfg).forEach(([k, v]) => fd.append(k, v));
 
   try{
     const res = await fetch('/api/local-subtitle/import', {method:'POST', body:fd});
@@ -1170,6 +1365,26 @@ async function mergeLocalShortSentences(){
     setLocalStatus(100, `合并完成：合并 ${data.merged || 0} 处短句`);
     showToast('短句合并完成');
   }catch(e){ showToast('合并失败: ' + e.message); }
+}
+
+async function splitLocalLongSentences(){
+  if(!localSessionId){ showToast('请先读取字幕'); return; }
+  setLocalStatus(25, '正在按语义拆分过长字幕...');
+  try{
+    const res = await fetch('/api/local-subtitle/split', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ session_id: localSessionId })
+    });
+    const data = await res.json();
+    if(data.error) throw new Error(data.error);
+    renderLocalSession(data);
+    let msg = `智能分段完成：新增 ${data.split || 0} 条字幕`;
+    if(data.cleared_translations){
+      msg += `，已清空 ${data.cleared_translations} 条旧翻译，请重新翻译`;
+    }
+    setLocalStatus(100, msg);
+    showToast('智能分段完成');
+  }catch(e){ showToast('智能分段失败: ' + e.message); }
 }
 
 async function checkLocalWords(){
@@ -1240,11 +1455,13 @@ async function translateLocalSubtitle(){
   if(!localSessionId){ showToast('请先读取字幕'); return; }
   let cfg;
   try{ cfg = getLocalAiSettings(); }catch(e){ showToast(e.message); return; }
+  let compareCfg;
+  try{ compareCfg = getCompareTranslateSettings(); }catch(e){ showToast(e.message); return; }
   setLocalStatus(0, '正在提交翻译任务...');
   try{
     const res = await fetch('/api/local-subtitle/translate', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ session_id: localSessionId, ...cfg })
+      body: JSON.stringify({ session_id: localSessionId, ...cfg, ...compareCfg })
     });
     const data = await res.json();
     if(data.error) throw new Error(data.error);
@@ -1275,12 +1492,100 @@ async function exportLocalSubtitle(){
   }catch(e){ showToast('导出失败: ' + e.message); }
 }
 
+function addClipRow(values={}){
+  const list = document.getElementById('clipList');
+  const id = ++clipRowSeq;
+  const row = document.createElement('div');
+  row.className = 'clip-row';
+  row.dataset.clipRow = id;
+  row.innerHTML = `
+    <input class="clip-title" type="text" data-clip-title="${id}" placeholder="片段标题，例如 clip_01" value="${escValue(values.title || '')}" title="切片标题，会用于输出文件名。">
+    <input type="text" data-clip-start="${id}" placeholder="开始 00:00:00" value="${escValue(values.start || '')}" title="切片开始时间，支持 90、01:30、00:01:30.500。">
+    <input type="text" data-clip-end="${id}" placeholder="结束 00:02:30" value="${escValue(values.end || '')}" title="切片结束时间，必须大于开始时间。">
+    <button class="btn-sm danger" onclick="removeClipRow(${id})" title="删除这个切片时间段。">删除</button>
+  `;
+  list.appendChild(row);
+}
+
+function removeClipRow(id){
+  const row = document.querySelector(`[data-clip-row="${id}"]`);
+  if(row) row.remove();
+  if(!document.querySelector('[data-clip-row]')) addClipRow();
+}
+
+function collectClipRows(){
+  const rows = [...document.querySelectorAll('[data-clip-row]')];
+  return rows.map(row => {
+    const id = row.dataset.clipRow;
+    return {
+      title: (document.querySelector(`[data-clip-title="${id}"]`)?.value || '').trim(),
+      start: (document.querySelector(`[data-clip-start="${id}"]`)?.value || '').trim(),
+      end: (document.querySelector(`[data-clip-end="${id}"]`)?.value || '').trim()
+    };
+  }).filter(item => item.start || item.end || item.title);
+}
+
+async function setClipSourcePath(){
+  const videoPath = document.getElementById('clipVideoPath').value.trim();
+  if(!videoPath){ showToast('请先粘贴本地视频完整路径'); return; }
+  setLocalStatus(0, '正在读取切片视频路径...');
+  try{
+    const res = await fetch('/api/local-subtitle/clip-source', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        video_path: videoPath,
+        project_title: document.getElementById('localProjectTitle').value
+      })
+    });
+    const data = await res.json();
+    if(data.error) throw new Error(data.error);
+    renderLocalSession(data);
+    setLocalStatus(100, `已引用切片视频，输出目录：${data.clip_output_dir || '原视频同目录'}`);
+    showToast('切片视频路径已引用');
+    loadFiles();
+  }catch(e){
+    showToast('切片视频路径读取失败: ' + e.message);
+  }
+}
+
+async function exportLocalClips(){
+  if(!localSessionId){ showToast('请先上传并读取视频'); return; }
+  const clips = collectClipRows();
+  if(!clips.length){ showToast('请至少添加一个切片时间段'); return; }
+  for(const [i, clip] of clips.entries()){
+    if(!clip.start || !clip.end){
+      showToast(`第 ${i + 1} 个切片缺少开始或结束时间`);
+      return;
+    }
+  }
+  setLocalStatus(0, '正在提交视频切片任务...');
+  try{
+    const res = await fetch('/api/local-subtitle/clips', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ session_id: localSessionId, clips })
+    });
+    const data = await res.json();
+    if(data.error) throw new Error(data.error);
+    await pollLocalTask(data.task_id, d => {
+      showToast(`切片完成：${(d && d.clips && d.clips.length) || clips.length} 个片段`);
+      loadFiles();
+    });
+  }catch(e){
+    showToast('切片失败: ' + e.message);
+  }
+}
+
 async function startLocalSubtitle(){
   const fileInput = document.getElementById('localVideoFile');
   const file = fileInput.files && fileInput.files[0];
   if(!file){ showToast('请选择本地视频或音频文件'); return; }
   let cfg;
   try{ cfg = getLocalAiSettings(); }catch(e){ showToast(e.message); return; }
+  let compareCfg;
+  try{ compareCfg = getCompareTranslateSettings(); }catch(e){ showToast(e.message); return; }
+  let asrCfg;
+  try{ asrCfg = getLocalAsrSettings(); }catch(e){ showToast(e.message); return; }
   const btn = document.getElementById('localOneclickBtn');
   const link = document.getElementById('localSubDownload');
   btn.disabled = true; btn.textContent = '一键处理中...';
@@ -1293,13 +1598,16 @@ async function startLocalSubtitle(){
   fd.append('api_key', cfg.api_key);
   fd.append('model', cfg.model);
   fd.append('prompt', cfg.prompt);
+  fd.append('compare_enabled', compareCfg.compare_enabled ? '1' : '0');
+  fd.append('compare_api_url', compareCfg.compare_api_url || '');
+  fd.append('compare_api_key', compareCfg.compare_api_key || '');
+  fd.append('compare_model', compareCfg.compare_model || '');
   fd.append('language', document.getElementById('localSubLang').value);
-  fd.append('device', document.getElementById('localSubDevice').value);
   fd.append('output_mode', document.getElementById('localSubOutput').value);
   fd.append('order', document.getElementById('localSubOrder').value);
-  fd.append('transcribe_model', 'large-v3');
   fd.append('initial_prompt', cfg.prompt);
   fd.append('project_title', document.getElementById('localProjectTitle').value);
+  Object.entries(asrCfg).forEach(([k, v]) => fd.append(k, v));
 
   try{
     const res = await fetch('/api/local-subtitle/start', {method:'POST', body:fd});
@@ -1343,8 +1651,8 @@ async function loadFiles(){
         <div class="file-meta">${f.ext.toUpperCase()} &middot; ${f.size} MB</div>
       </div>
       <div class="file-actions">
-        <button class="btn-sm" onclick="window.open('${f.url}')">下载</button>
-        <button class="btn-sm danger" onclick="deleteFile('${escAttr(f.name)}')">删除</button>
+        <button class="btn-sm" onclick="window.open('${escAttr(f.url)}','_blank')" title="打开或下载这个文件。">下载</button>
+        <button class="btn-sm danger" onclick="deleteFile('${escAttr(f.name)}')" title="删除这个文件。">删除</button>
       </div>
     </div>`;
   }).join('');
@@ -1359,10 +1667,19 @@ async function deleteFile(name){
 }
 
 async function clearAll(){
-  if(!confirm('确认清空所有下载文件？'))return;
+  if(!confirm('确认清空 downloads 下的下载文件和项目输出？视频、音频、字幕、切片都会清空。'))return;
   const res = await fetch('/api/clear',{method:'POST'});
   const data = await res.json();
-  if(data.ok){showToast('已清空');loadFiles();}
+  if(data.ok){
+    localSessionId = '';
+    localCorrections = [];
+    document.getElementById('localPreview').innerHTML = '<div class="empty">先选择本地视频、音频或 SRT 文件</div>';
+    document.getElementById('localSuggestions').style.display = 'none';
+    document.getElementById('localSubDownload').style.display = 'none';
+    setLocalStatus(100, `已清空 ${data.removed || 0} 项`);
+    showToast('已清空');
+    loadFiles();
+  }
   else showToast(data.error||'清空失败');
 }
 
@@ -1396,12 +1713,31 @@ async function downloadThumbnail(){
 
 // ── AI Description ───────────────────────────────────────────────────
 function loadAiSettings(){
-  ['aiApiUrl','aiApiKey','aiModel'].forEach(id => {
+  ['aiApiUrl','aiApiKey','aiModel','localAsrProvider','volcApiKey','volcResourceId','volcAudioUrl','volcSegmentMinutes','compareApiUrl','compareApiKey','compareModel'].forEach(id => {
     const el = document.getElementById(id);
     const saved = localStorage.getItem(id);
-    if(saved) el.value = saved;
-    el.addEventListener('change', () => localStorage.setItem(id, el.value));
+    if(saved){
+      if(id === 'localAsrProvider' && !['volc_flash','volc_standard_url'].includes(saved)){
+        el.value = 'volc_flash';
+        localStorage.setItem(id, 'volc_flash');
+      }else{
+        el.value = saved;
+      }
+    }
+    el.addEventListener('change', () => {
+      localStorage.setItem(id, el.value);
+      if(id === 'localAsrProvider') toggleLocalAsrProvider();
+    });
   });
+  const compareToggle = document.getElementById('compareTranslateToggle');
+  const compareSaved = localStorage.getItem('compareTranslateToggle');
+  if(compareSaved) compareToggle.checked = compareSaved === '1';
+  compareToggle.addEventListener('change', () => {
+    localStorage.setItem('compareTranslateToggle', compareToggle.checked ? '1' : '0');
+    toggleCompareTranslate();
+  });
+  toggleLocalAsrProvider();
+  toggleCompareTranslate();
 }
 
 async function fetchRefDesc(){
@@ -1492,7 +1828,10 @@ document.getElementById('localVideoFile').addEventListener('change', e => {
   }
 });
 loadFiles();
+addClipRow();
+toggleType();
 updateSubPreview();
+toggleTranslateHint();
 </script>
 </body>
 </html>

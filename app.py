@@ -1,6 +1,7 @@
 """YouTube Downloader Web Application"""
 
 import json
+import base64
 import os
 import re
 import shutil
@@ -8,6 +9,8 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.parse
+import urllib.error
 import urllib.request
 import uuid
 import winreg
@@ -74,6 +77,19 @@ def rel_download_path(path):
         return Path(path).name
 
 
+def path_download_info(path):
+    path = Path(path)
+    try:
+        rel = str(path.resolve().relative_to(DOWNLOADS_DIR.resolve())).replace("\\", "/")
+        return {
+            "file": rel,
+            "url": f"/files/{urllib.parse.quote(rel, safe='/')}",
+            "path": str(path),
+        }
+    except Exception:
+        return {"file": str(path), "url": "", "path": str(path)}
+
+
 def seconds_to_desc_time(seconds):
     seconds = max(0, int(seconds or 0))
     h, rem = divmod(seconds, 3600)
@@ -127,7 +143,15 @@ def build_bilibili_description(info, url, timeline=""):
     return "\n".join(parts).strip() + "\n"
 
 
-def write_project_notes(project_dir, subdirs, info=None, url="", timeline=""):
+def write_project_notes(
+    project_dir,
+    subdirs,
+    info=None,
+    url="",
+    timeline="",
+    save_description=True,
+    save_link_title=True,
+):
     info = info or {}
     title = info.get("title") or project_dir.name
     meta = {
@@ -144,14 +168,20 @@ def write_project_notes(project_dir, subdirs, info=None, url="", timeline=""):
         json.dumps(meta, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    (subdirs["description"] / "bilibili_description.txt").write_text(
-        build_bilibili_description(info, url, timeline),
-        encoding="utf-8",
-    )
-    (subdirs["description"] / "timeline_outline.md").write_text(
-        f"# {title}\n\n## 时间轴大纲\n\n{timeline or '暂无时间轴，后续可由字幕分析生成。'}\n",
-        encoding="utf-8",
-    )
+    if save_link_title:
+        (subdirs["source"] / "link_title.txt").write_text(
+            f"标题：{title}\n链接：{url or ''}\n",
+            encoding="utf-8",
+        )
+    if save_description:
+        (subdirs["description"] / "bilibili_description.txt").write_text(
+            build_bilibili_description(info, url, timeline),
+            encoding="utf-8",
+        )
+        (subdirs["description"] / "timeline_outline.md").write_text(
+            f"# {title}\n\n## 时间轴大纲\n\n{timeline or '暂无时间轴，后续可由字幕分析生成。'}\n",
+            encoding="utf-8",
+        )
 
 
 def fetch_video_info(url):
@@ -221,19 +251,67 @@ def find_primary_video(search_dir):
     return max(candidates, key=lambda p: p.stat().st_mtime)
 
 
-def ensure_audio_from_video(project_dir, subdirs, update=None):
+def normalize_audio_format(audio_format):
+    return "mp3"
+
+
+def audio_export_args(audio_format):
+    return "mp3", ["-vn", "-c:a", "libmp3lame", "-b:a", "192k"]
+
+
+def standardize_mp3_file(path, update=None):
+    """Rewrite MP3 as a Windows-friendly MP3 file."""
+    path = Path(path)
+    if path.suffix.lower() != ".mp3" or not path.exists() or path.stat().st_size <= 0:
+        return False
+    tmp = path.with_name(f"{path.stem}.standardizing{path.suffix}")
+    if update:
+        update("downloading", 97, f"Standardizing MP3: {path.name}")
+    result = subprocess.run(
+        [
+            "ffmpeg", "-y", "-i", str(path),
+            "-map", "0:a:0", "-vn", "-map_metadata", "-1",
+            "-c:a", "libmp3lame", "-b:a", "192k", "-ar", "44100", "-ac", "2",
+            "-id3v2_version", "3", "-write_id3v1", "1",
+            str(tmp),
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=1800,
+    )
+    if result.returncode == 0 and tmp.exists() and tmp.stat().st_size > 0:
+        tmp.replace(path)
+        return True
+    tmp.unlink(missing_ok=True)
+    return False
+
+
+def standardize_project_mp3_files(project_dir, update=None):
+    changed = 0
+    for mp3 in sorted(Path(project_dir).rglob("*.mp3")):
+        if ".standardizing" in mp3.name:
+            continue
+        if standardize_mp3_file(mp3, update):
+            changed += 1
+    return changed
+
+
+def ensure_audio_from_video(project_dir, subdirs, audio_format="mp3", update=None):
     video = find_primary_video(project_dir)
     if not video:
         return None
-    audio_path = subdirs["audio"] / f"{sanitize_filename(video.stem)}.audio.m4a"
+    audio_ext, ffmpeg_audio_args = audio_export_args(audio_format)
+    audio_path = subdirs["audio"] / f"{sanitize_filename(video.stem)}.audio.{audio_ext}"
     if audio_path.exists() and audio_path.stat().st_size > 0:
         return audio_path
     if update:
-        update("downloading", 96, "Extracting audio for ASR...")
+        update("downloading", 96, f"Extracting {audio_ext.upper()} audio...")
     result = subprocess.run(
         [
             "ffmpeg", "-y", "-i", str(video),
-            "-vn", "-c:a", "aac", "-b:a", "128k",
+            *ffmpeg_audio_args,
             str(audio_path),
         ],
         capture_output=True,
@@ -272,6 +350,14 @@ def save_session_translation_artifacts(session, stem="subtitle"):
             bi_path = translation_dir / f"{stem}.bilingual.{order}.srt"
             bi_path.write_text(entries_to_srt(entries, bilingual=True, order=order), encoding="utf-8")
             outputs[f"bilingual_{order}"] = bi_path
+    if any((e.get("translation_compare") or "").strip() for e in entries):
+        compare_entries = [
+            {**e, "source": e.get("translation_compare", ""), "translation": ""}
+            for e in entries
+        ]
+        compare_path = translation_dir / f"{stem}.compare_zh.srt"
+        compare_path.write_text(entries_to_srt(compare_entries, bilingual=False), encoding="utf-8")
+        outputs["compare_zh"] = compare_path
     if project_dir:
         (translation_dir / "translation_manifest.json").write_text(
             json.dumps(
@@ -362,6 +448,27 @@ def parse_time(time_str):
         m, s = parts
         return int(m) * 60 + float(s)
     return 0
+
+
+def parse_clip_time(value):
+    """Parse clip time as seconds, MM:SS, HH:MM:SS, with optional milliseconds."""
+    text = str(value or "").strip().replace(",", ".")
+    if not text:
+        raise ValueError("时间不能为空")
+    if re.fullmatch(r"\d+(?:\.\d+)?", text):
+        return float(text)
+    parts = text.split(":")
+    if len(parts) == 2:
+        minutes, seconds = parts
+        return int(minutes) * 60 + float(seconds)
+    if len(parts) == 3:
+        hours, minutes, seconds = parts
+        return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+    raise ValueError(f"时间格式不正确：{value}")
+
+
+def clip_time_label(seconds):
+    return format_srt_time(seconds).replace(",", ".")
 
 
 def format_ass_time(seconds):
@@ -498,40 +605,163 @@ def hex_to_ass(hex_color):
     return f"&H00{b:02X}{g:02X}{r:02X}"
 
 
+def hex_to_ass_bgr(hex_color):
+    """Convert #RRGGBB to ASS inline BGR (BBGGRR)."""
+    h = (hex_color or "#000000").lstrip('#')
+    if len(h) != 6:
+        h = "000000"
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"{b:02X}{g:02X}{r:02X}"
+
+
+def clamp_int(value, min_value, max_value, default):
+    try:
+        value = int(value)
+    except Exception:
+        value = default
+    return max(min_value, min(max_value, value))
+
+
+def ass_escape_text(text):
+    """Escape text that would otherwise be parsed as ASS override tags."""
+    text = str(text or "").replace("\r", " ").replace("\n", " ")
+    text = text.replace("{", "（").replace("}", "）")
+    return text.strip()
+
+
+def estimate_ass_text_width(text, font_size):
+    """Estimate rendered text width for background placement."""
+    width = 0.0
+    for ch in str(text or ""):
+        code = ord(ch)
+        if ch.isspace():
+            width += font_size * 0.32
+        elif code >= 0x4E00 and code <= 0x9FFF:
+            width += font_size
+        elif code > 127:
+            width += font_size * 0.82
+        elif ch in "ilI.,'!:;|`":
+            width += font_size * 0.28
+        elif ch in "mwMW@#%&QG":
+            width += font_size * 0.86
+        elif ch.isupper():
+            width += font_size * 0.62
+        else:
+            width += font_size * 0.52
+    return max(width, font_size)
+
+
+def wrap_subtitle_text(text, font_size, max_width):
+    """Wrap one subtitle line so ASS and the custom background agree."""
+    text = ass_escape_text(text)
+    if not text:
+        return []
+    if estimate_ass_text_width(text, font_size) <= max_width:
+        return [text]
+
+    chunks = []
+    current = ""
+    tokens = re.findall(r"\S+\s*", text)
+    for token in tokens:
+        candidate = current + token
+        if current and estimate_ass_text_width(candidate.strip(), font_size) > max_width:
+            chunks.append(current.strip())
+            current = token
+        else:
+            current = candidate
+
+        while estimate_ass_text_width(current.strip(), font_size) > max_width and len(current.strip()) > 1:
+            part = ""
+            for ch in current.strip():
+                if part and estimate_ass_text_width(part + ch, font_size) > max_width:
+                    break
+                part += ch
+            chunks.append(part.strip())
+            current = current.strip()[len(part):].lstrip()
+
+    if current.strip():
+        chunks.append(current.strip())
+    return chunks or [text]
+
+
+def rounded_rect_ass_path(width, height, radius):
+    """Build an ASS vector path for a rounded rectangle centered on origin."""
+    width = max(1, round(width))
+    height = max(1, round(height))
+    radius = max(0, min(round(radius), width // 2, height // 2))
+    x1, y1 = -width // 2, -height // 2
+    x2, y2 = x1 + width, y1 + height
+    if radius <= 0:
+        return f"m {x1} {y1} l {x2} {y1} l {x2} {y2} l {x1} {y2}"
+
+    k = 0.55228475
+    c = round(radius * k)
+    r = radius
+    return (
+        f"m {x1 + r} {y1} "
+        f"l {x2 - r} {y1} "
+        f"b {x2 - r + c} {y1} {x2} {y1 + r - c} {x2} {y1 + r} "
+        f"l {x2} {y2 - r} "
+        f"b {x2} {y2 - r + c} {x2 - r + c} {y2} {x2 - r} {y2} "
+        f"l {x1 + r} {y2} "
+        f"b {x1 + r - c} {y2} {x1} {y2 - r + c} {x1} {y2 - r} "
+        f"l {x1} {y1 + r} "
+        f"b {x1} {y1 + r - c} {x1 + r - c} {y1} {x1 + r} {y1}"
+    )
+
+
+def subtitle_anchor_center(alignment, play_res_x, play_res_y, side_margin, margin_v, block_w, block_h):
+    """Return the center of the text block for an ASS alignment value."""
+    alignment = int(alignment or 2)
+    col = alignment % 3
+    if col == 1:
+        x = side_margin + block_w / 2
+    elif col == 2:
+        x = play_res_x / 2
+    else:
+        x = play_res_x - side_margin - block_w / 2
+
+    if alignment in (7, 8, 9):
+        y = margin_v + block_h / 2
+    elif alignment in (4, 5, 6):
+        y = play_res_y / 2
+    else:
+        y = play_res_y - margin_v - block_h / 2
+    return x, y
+
+
 def generate_dual_ass(merged_segs, opts):
     """Generate ASS content with configurable language order."""
-    font = opts.get('font', 'Microsoft YaHei')
-    size = opts.get('size', 52)
+    font = opts.get('font', 'Microsoft YaHei') or 'Microsoft YaHei'
+    needs_cjk_font = any(
+        any("\u4e00" <= ch <= "\u9fff" for ch in str(seg[2] or ""))
+        for seg in merged_segs
+    )
+    if needs_cjk_font and font.strip().lower() in {
+        "arial", "calibri", "verdana", "tahoma", "times new roman", "segoe ui"
+    }:
+        font = "Microsoft YaHei"
+    size = clamp_int(opts.get('size', 52), 16, 200, 52)
     color = hex_to_ass(opts.get('color', '#FFFFFF'))
     outline = hex_to_ass(opts.get('outline_color', '#000000'))
     sub_order = opts.get('sub_order', 'zh_top')
-    sub_pos = opts.get('sub_pos', 2)
-    margin_v = opts.get('margin_v', 30)
+    sub_pos = clamp_int(opts.get('sub_pos', 2), 1, 9, 2)
+    margin_v = clamp_int(opts.get('margin_v', 30), 0, 1000, 30)
     play_res_x = int(opts.get('play_res_x', 1920) or 1920)
     play_res_y = int(opts.get('play_res_y', 1080) or 1080)
     side_margin = max(10, round(play_res_x * 30 / 1920))
 
     bg_enabled = opts.get('bg_enabled', False)
     bg_color_hex = opts.get('bg_color', '#000000')
-    bg_opacity = opts.get('bg_opacity', 50)
-
-    # Use libass' native opaque box so the text and background are laid out
-    # by the same renderer. The previous hand-drawn rectangle drifted on some
-    # videos because font metrics and line spacing were only estimated.
-    if bg_enabled:
-        alpha = int((1 - bg_opacity / 100) * 255)
-        bg_r = int(bg_color_hex[1:3], 16)
-        bg_g = int(bg_color_hex[3:5], 16)
-        bg_b = int(bg_color_hex[5:7], 16)
-        bg_fill = f"&H{alpha:02X}{bg_b:02X}{bg_g:02X}{bg_r:02X}"
-        border_style = 3
-        back_colour = bg_fill
-        outline_val = 6
-    else:
-        border_style = 1
-        back_colour = "&H80000000"
-        outline_val = 2.5
-        bg_fill = None
+    bg_opacity = clamp_int(opts.get('bg_opacity', 50), 0, 100, 50)
+    bg_radius = clamp_int(opts.get('bg_radius', 30), 0, 100, 30)
+    bg_width_pct = clamp_int(opts.get('bg_width', 80), 0, 100, 80)
+    bg_height_pct = clamp_int(opts.get('bg_height', 20), 0, 100, 20)
+    bg_offset_x = clamp_int(opts.get('bg_offset_x', 0), -100, 100, 0)
+    bg_offset_y = clamp_int(opts.get('bg_offset_y', 0), -100, 100, 0)
+    bg_alpha = int(round((1 - bg_opacity / 100) * 255))
+    outline_val = max(2, round(size * 0.045, 1))
+    max_text_width = max(size * 8, play_res_x - side_margin * 2 - size)
 
     ass = (
         "[Script Info]\n"
@@ -547,8 +777,10 @@ def generate_dual_ass(merged_segs, opts):
         "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
         "Alignment, MarginL, MarginR, MarginV, Encoding\n"
         f"Style: Default,{font},{size},{color},{color},"
-        f"{outline},{back_colour},-1,0,0,0,100,100,0,0,{border_style},{outline_val},1,"
+        f"{outline},&H80000000,-1,0,0,0,100,100,0,0,1,{outline_val},1,"
         f"{sub_pos},{side_margin},{side_margin},{margin_v},1\n\n"
+        f"Style: Bg,Arial,10,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,"
+        f"0,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1\n\n"
         "[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     )
@@ -570,8 +802,38 @@ def generate_dual_ass(merged_segs, opts):
             if en:
                 parts.append(en)
         if parts:
-            text = "\\N".join(parts)
-            ass += f"Dialogue: 0,{start_str},{end_str},Default,,0,0,0,,{text}\n"
+            lines = []
+            for part in parts:
+                lines.extend(wrap_subtitle_text(part, size, max_text_width))
+            if not lines:
+                continue
+
+            widths = [estimate_ass_text_width(line, size) for line in lines]
+            text_w = min(max(widths), max_text_width)
+            line_h = size * 1.18
+            text_h = max(line_h, len(lines) * line_h)
+            text = "\\N".join(lines)
+
+            if bg_enabled:
+                padx = max(text_w * bg_width_pct / 200, size * 0.3) + outline_val
+                pady = max(text_h * bg_height_pct / 200, size * 0.2) + outline_val
+                bg_w = text_w + 2 * padx
+                bg_h = text_h + 2 * pady
+                radius = bg_radius / 100 * min(bg_w, bg_h) / 2
+                center_x, center_y = subtitle_anchor_center(
+                    sub_pos, play_res_x, play_res_y, side_margin, margin_v, text_w, text_h
+                )
+                center_x += bg_offset_x * size / 50
+                center_y += bg_offset_y * size / 50
+                path = rounded_rect_ass_path(bg_w, bg_h, radius)
+                bg_color = hex_to_ass_bgr(bg_color_hex)
+                ass += (
+                    f"Dialogue: 0,{start_str},{end_str},Bg,,0,0,0,,"
+                    f"{{\\an5\\pos({round(center_x)},{round(center_y)})\\p1\\bord0\\shad0"
+                    f"\\1c&H{bg_color}&\\1a&H{bg_alpha:02X}&}}{path}\n"
+                )
+
+            ass += f"Dialogue: 1,{start_str},{end_str},Default,,0,0,0,,{text}\n"
 
     return ass
 
@@ -600,7 +862,7 @@ def find_subtitle_files(downloads_dir):
     return zh_file, en_file
 
 
-def translate_subtitles(segments, api_url, api_key, model, update=None):
+def _legacy_translate_subtitles(segments, api_url, api_key, model, update=None):
     """Translate subtitle segments to Chinese using AI."""
     if not segments or not api_url or not api_key:
         return []
@@ -659,6 +921,92 @@ def translate_subtitles(segments, api_url, api_key, model, update=None):
     return translated
 
 
+def parse_numbered_translations(result, expected_indexes):
+    translations = {}
+    ordered = []
+    for line in (result or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        match = re.match(r"^\s*(\d+)\s*[\.\)、:：|]\s*(.+?)\s*$", line)
+        if match:
+            translations[int(match.group(1)) - 1] = match.group(2).strip()
+        else:
+            ordered.append(line)
+
+    if not translations and len(ordered) == len(expected_indexes):
+        for idx, line in zip(expected_indexes, ordered):
+            translations[idx] = line.strip()
+    return translations
+
+
+def contains_cjk(text):
+    return any("\u4e00" <= ch <= "\u9fff" for ch in str(text or ""))
+
+
+def translate_subtitles(segments, api_url, api_key, model, update=None):
+    """Translate subtitle segments to Chinese using AI."""
+    if not segments:
+        return []
+    if not api_url or not api_key:
+        raise RuntimeError("没有中文字幕，需要先填写 AI API 地址和 Key，或关闭自动翻译。")
+
+    from openai import OpenAI
+    client = OpenAI(base_url=api_url.rstrip("/"), api_key=api_key)
+
+    batch_size = 60
+    translated = []
+    total_batches = (len(segments) + batch_size - 1) // batch_size
+
+    for i in range(0, len(segments), batch_size):
+        batch = segments[i:i + batch_size]
+        batch_num = i // batch_size + 1
+        if update:
+            update("downloading", 95, f"正在翻译字幕 ({batch_num}/{total_batches})...")
+
+        lines = []
+        expected_indexes = []
+        for j, (start, end, text) in enumerate(batch):
+            idx = i + j
+            expected_indexes.append(idx)
+            lines.append(f"{idx + 1}. {text}")
+
+        prompt = (
+            "Translate the following English subtitle lines into natural Simplified Chinese.\n"
+            "Keep AI/company/product terms accurate, keep each line concise for video subtitles, "
+            "and output exactly one line per input.\n"
+            "Output format: number. Chinese translation\n"
+            "Do not add explanations, markdown, or extra text.\n\n"
+            + "\n".join(lines)
+        )
+
+        try:
+            resp = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": "You are a professional EN-to-ZH subtitle translator."},
+                    {"role": "user", "content": prompt},
+                ],
+            )
+            result = (resp.choices[0].message.content or "").strip()
+            translations = parse_numbered_translations(result, expected_indexes)
+        except Exception as exc:
+            raise RuntimeError(f"AI 字幕翻译失败：{exc}") from exc
+
+        missing = [idx for idx in expected_indexes if not translations.get(idx)]
+        if missing:
+            raise RuntimeError(f"AI 字幕翻译返回不完整，缺少 {len(missing)} 行。")
+
+        for j, (start, end, text) in enumerate(batch):
+            idx = i + j
+            translated.append((start, end, translations[idx]))
+
+    if not any(contains_cjk(text) for _, _, text in translated):
+        raise RuntimeError("AI 字幕翻译没有返回中文内容，请检查模型或 API 设置。")
+
+    return translated
+
+
 def process_dual_subtitles(downloads_dir, opts, update=None):
     """Parse subtitle files and produce a dual ASS subtitle."""
     sub_mode = opts.get('sub_mode', 'zh_en')
@@ -674,10 +1022,11 @@ def process_dual_subtitles(downloads_dir, opts, update=None):
         api_url = opts.get('api_url', '')
         api_key = opts.get('api_key', '')
         model = opts.get('model', 'gpt-4o-mini')
-        if api_url and api_key:
-            translated = translate_subtitles(en_segs, api_url, api_key, model, update)
-            if translated:
-                zh_segs = translated
+        translated = translate_subtitles(en_segs, api_url, api_key, model, update)
+        if translated:
+            zh_segs = translated
+    elif not zh_segs and en_segs and sub_mode == 'zh_en' and update:
+        update("downloading", 95, "没有找到中文字幕；如需双语，请开启自动翻译中文并填写 AI API。")
 
     if sub_mode == 'zh':
         en_segs = []
@@ -776,44 +1125,6 @@ def burn_subtitles_to_video(downloads_dir, ass_name, update=None):
 
 # ── Local Video Subtitle Translation ─────────────────────────────────
 
-YIMU_PROJECT_DIR = Path(
-    r"N:\YiMu-Subtitle-Translator-main\YiMu-Subtitle-Translator-main-pack - 副本\YiMu-Subtitle-Translator-main-pack"
-)
-
-
-def find_whisper_cli():
-    candidates = [
-        Path(__file__).parent / "tools" / "faster-whisper-xxl" / "faster-whisper-xxl.exe",
-        YIMU_PROJECT_DIR / "tools" / "faster-whisper-xxl" / "faster-whisper-xxl.exe",
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            return str(candidate)
-    return shutil.which("faster-whisper-xxl.exe") or shutil.which("faster-whisper-xxl") or ""
-
-
-def find_whisper_model_dir():
-    candidates = [
-        Path(__file__).parent / "tools" / "faster-whisper-xxl" / "_models",
-        YIMU_PROJECT_DIR / "tools" / "faster-whisper-xxl" / "_models",
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            return str(candidate)
-    return ""
-
-
-def find_local_ffmpeg_dir():
-    candidates = [
-        Path(__file__).parent / "tools" / "ffmpeg" / "bin",
-        YIMU_PROJECT_DIR / "tools" / "ffmpeg" / "bin",
-        YIMU_PROJECT_DIR / "tools" / "faster-whisper-xxl",
-    ]
-    for candidate in candidates:
-        if (candidate / "ffmpeg.exe").exists():
-            return str(candidate)
-    return ""
-
 
 def local_task_update(task_id, **fields):
     with local_subtitle_lock:
@@ -876,6 +1187,7 @@ def serialize_local_entries(entries, limit=120):
         "end": format_srt_time(e["end"]),
         "source": e.get("source", ""),
         "translation": e.get("translation", ""),
+        "translation_compare": e.get("translation_compare", ""),
     } for i, e in enumerate(visible)]
 
 
@@ -908,11 +1220,13 @@ def get_local_session(session_id):
 def local_session_payload(session, limit=120):
     entries = session.get("entries", [])
     translated = sum(1 for e in entries if (e.get("translation") or "").strip())
+    compared = sum(1 for e in entries if (e.get("translation_compare") or "").strip())
     return {
         "session_id": session["id"],
         "name": session.get("name", ""),
         "segments": len(entries),
         "translated": translated,
+        "compared": compared,
         "corrections": session.get("corrections", []),
         "project_dir": session.get("project_dir", ""),
         "translation_dir": session.get("translation_dir", ""),
@@ -964,6 +1278,254 @@ def merge_local_short_entries(entries, max_chars_cjk=30, max_words_latin=14, max
     return merged, changed
 
 
+def semantic_cut_position(text, max_chars, min_chars):
+    limit = min(max_chars, len(text) - 1)
+    if limit <= min_chars:
+        return limit
+    head = text[:limit + 1]
+
+    if text_is_cjk(text):
+        punctuation = list(re.finditer(r"[。！？；，、](?:\s*)", head))
+        punctuation = [m for m in punctuation if m.end() >= min_chars]
+        if punctuation:
+            return punctuation[-1].end()
+    else:
+        punctuation = list(re.finditer(r"[,;:.!?](?:\s+|$)", head))
+        punctuation = [m for m in punctuation if m.end() >= min_chars]
+        if punctuation:
+            return punctuation[-1].end()
+
+        connectors = (
+            r"\s+(?=(?:and|but|because|so|until|when|while|which|that|where|if|"
+            r"though|although|since|as|after|before|unless|rather|instead)\b)"
+        )
+        matches = list(re.finditer(connectors, head, flags=re.IGNORECASE))
+        matches = [m for m in matches if m.start() >= min_chars]
+        if matches:
+            return matches[-1].start()
+
+    space = head.rfind(" ")
+    if space >= min_chars:
+        return space
+    return limit
+
+
+def split_text_semantic(text, max_chars, min_chars):
+    text = re.sub(r"\s+", " ", (text or "").strip())
+    if not text or len(text) <= max_chars:
+        return [text] if text else []
+
+    parts = []
+    rest = text
+    while len(rest) > max_chars:
+        cut = semantic_cut_position(rest, max_chars, min_chars)
+        chunk = rest[:cut].strip()
+        rest = rest[cut:].strip()
+        rest = re.sub(r"^[,;，、]\s*", "", rest)
+        if chunk:
+            parts.append(chunk)
+        if not rest:
+            break
+
+    if rest:
+        if parts and len(rest) < min_chars // 2 and len(parts[-1]) + 1 + len(rest) <= int(max_chars * 1.25):
+            parts[-1] = f"{parts[-1]} {rest}".strip()
+        else:
+            parts.append(rest)
+    return parts
+
+
+def split_long_subtitle_entries(entries, max_chars_latin=84, max_chars_cjk=42):
+    result = []
+    split_count = 0
+    cleared_translations = 0
+
+    for entry in entries:
+        source = re.sub(r"\s+", " ", (entry.get("source") or "").strip())
+        if not source:
+            result.append(dict(entry))
+            continue
+
+        is_cjk = text_is_cjk(source)
+        max_chars = max_chars_cjk if is_cjk else max_chars_latin
+        min_chars = 16 if is_cjk else 32
+        parts = split_text_semantic(source, max_chars=max_chars, min_chars=min_chars)
+        if len(parts) <= 1:
+            result.append(dict(entry, source=source))
+            continue
+
+        split_count += len(parts) - 1
+        duration = max(0.01, float(entry["end"]) - float(entry["start"]))
+        weights = [max(1, len(re.sub(r"\s+", "", part))) for part in parts]
+        total = max(1, sum(weights))
+        cursor = float(entry["start"])
+        translation = (entry.get("translation") or "").strip()
+        if translation:
+            cleared_translations += 1
+
+        for idx, part in enumerate(parts):
+            if idx == len(parts) - 1:
+                end = float(entry["end"])
+            else:
+                end = cursor + duration * weights[idx] / total
+            if end <= cursor:
+                end = min(float(entry["end"]), cursor + 0.5)
+            result.append({
+                "index": len(result) + 1,
+                "start": cursor,
+                "end": end,
+                "source": part,
+                "translation": "",
+            })
+            cursor = end
+
+    for idx, item in enumerate(result, 1):
+        item["index"] = idx
+    return result, split_count, cleared_translations
+
+
+def is_video_file(path):
+    return Path(path).suffix.lower() in (".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi")
+
+
+def resolve_session_video_path(session):
+    source_path = Path(session.get("source_path") or "")
+    if source_path.exists() and is_video_file(source_path):
+        return source_path
+    project_dir = session.get("project_dir")
+    if project_dir:
+        video = find_primary_video(Path(project_dir))
+        if video and video.exists():
+            return video
+    return None
+
+
+def default_original_clip_dir(video_path):
+    video_path = Path(video_path)
+    safe_stem = sanitize_filename(video_path.stem).strip() or "video"
+    return video_path.parent / f"{safe_stem}_clips"
+
+
+def resolve_clip_output_dir(session, video_path):
+    clip_output_dir = session.get("clip_output_dir")
+    if clip_output_dir:
+        out_dir = Path(clip_output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        return out_dir
+    project_dir = session.get("project_dir")
+    if project_dir:
+        _, subdirs = ensure_project_dirs(Path(project_dir).name)
+        return subdirs["clips"]
+    out_dir = default_original_clip_dir(video_path)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    return out_dir
+
+
+def clip_entries_for_range(entries, start, end):
+    clipped = []
+    for entry in entries:
+        entry_start = float(entry.get("start", 0))
+        entry_end = float(entry.get("end", 0))
+        if entry_end <= start or entry_start >= end:
+            continue
+        clipped.append({
+            "index": len(clipped) + 1,
+            "start": max(0, entry_start - start),
+            "end": max(0.01, min(entry_end, end) - start),
+            "source": entry.get("source", ""),
+            "translation": entry.get("translation", ""),
+        })
+    return clipped
+
+
+def run_local_clip_task(task_id, session_id, clips):
+    try:
+        session = get_local_session(session_id)
+        if not session:
+            raise RuntimeError("字幕会话不存在，请先读取上传的视频。")
+        video_path = resolve_session_video_path(session)
+        if not video_path:
+            raise RuntimeError("当前会话没有可切片的视频，请先上传并读取视频文件。")
+
+        clips_dir = resolve_clip_output_dir(session, video_path)
+        clips_dir.mkdir(parents=True, exist_ok=True)
+        total = len(clips)
+        if total <= 0:
+            raise RuntimeError("请至少添加一个切片时间段。")
+
+        manifest = []
+        for index, clip in enumerate(clips, 1):
+            title = sanitize_filename((clip.get("title") or f"clip_{index:02d}").strip())
+            title = title[:60] or f"clip_{index:02d}"
+            start = parse_clip_time(clip.get("start"))
+            end = parse_clip_time(clip.get("end"))
+            if end <= start:
+                raise RuntimeError(f"第 {index} 个切片结束时间必须大于开始时间。")
+            duration = end - start
+            if duration < 1:
+                raise RuntimeError(f"第 {index} 个切片太短，请至少保留 1 秒。")
+
+            stem = f"clip_{index:02d}_{title}"
+            output_video = clips_dir / f"{stem}.mp4"
+            output_srt = clips_dir / f"{stem}.srt"
+            local_task_update(
+                task_id,
+                status="running",
+                progress=round((index - 1) / total * 90),
+                message=f"正在导出切片 {index}/{total}...",
+            )
+            cmd = [
+                "ffmpeg", "-y",
+                "-ss", str(start),
+                "-i", str(video_path),
+                "-t", str(duration),
+                "-map", "0:v:0",
+                "-map", "0:a?",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+                "-c:a", "aac", "-b:a", "160k",
+                "-movflags", "+faststart",
+                str(output_video),
+            ]
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=1800,
+            )
+            if result.returncode != 0 or not output_video.exists() or output_video.stat().st_size <= 0:
+                detail = (result.stderr or result.stdout or "").strip().splitlines()[-5:]
+                raise RuntimeError(f"第 {index} 个切片导出失败：" + "；".join(detail))
+
+            clip_entries = clip_entries_for_range(session.get("entries", []), start, end)
+            if clip_entries:
+                output_srt.write_text(entries_to_srt(clip_entries, bilingual=True), encoding="utf-8")
+
+            manifest.append({
+                "index": index,
+                "title": clip.get("title") or f"clip_{index:02d}",
+                "start": clip_time_label(start),
+                "end": clip_time_label(end),
+                "duration": round(duration, 3),
+                "video": path_download_info(output_video),
+                "subtitle": path_download_info(output_srt) if output_srt.exists() else {},
+            })
+
+        manifest_path = clips_dir / "manual_clips.json"
+        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        local_task_update(
+            task_id,
+            status="completed",
+            progress=100,
+            message=f"切片完成：导出 {len(manifest)} 个片段到 {clips_dir}",
+            clips=manifest,
+            **path_download_info(manifest_path),
+        )
+    except Exception as exc:
+        local_task_update(task_id, status="error", message=str(exc), error=str(exc))
+
+
 def strip_code_fence(text):
     text = (text or "").strip()
     if text.startswith("```json"):
@@ -992,14 +1554,35 @@ def extract_json_array(text):
     return []
 
 
+def normalize_api_key(api_key):
+    key = (api_key or "").strip()
+    return re.sub(r"^Bearer\s+", "", key, flags=re.IGNORECASE).strip()
+
+
 def call_chat_model(api_url, api_key, model, messages):
     from openai import OpenAI
 
-    client = OpenAI(base_url=api_url.rstrip("/"), api_key=api_key)
-    response = client.chat.completions.create(
-        model=model,
-        messages=messages,
-    )
+    client = OpenAI(base_url=api_url.rstrip("/"), api_key=normalize_api_key(api_key))
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=messages,
+        )
+    except Exception as exc:
+        text = str(exc)
+        lowered = text.lower()
+        if (
+            "401" in text
+            or "invalid api key" in lowered
+            or "unauthorized" in lowered
+            or "无效的 api key" in lowered
+            or "无效的 API Key" in text
+        ):
+            raise RuntimeError(
+                "翻译/AI 检查使用的大模型 API Key 无效。"
+                "火山 API Key 只用于语音识别，请在下方 AI 设置里填写翻译模型的 API 地址、Key 和模型名。"
+            ) from exc
+        raise RuntimeError(f"调用翻译/AI 检查模型失败：{text}") from exc
     return (response.choices[0].message.content or "").strip()
 
 
@@ -1109,93 +1692,462 @@ def translate_local_entries(task_id, entries, api_url, api_key, model, user_hint
             entry["translation"] = zh or entry["source"]
 
 
-def transcribe_local_media(task_id, media_path, opts):
-    cli_exe = find_whisper_cli()
-    if not cli_exe:
-        raise RuntimeError("未找到 faster-whisper-xxl.exe。请确认 YiMu 工具目录仍在原位置。")
+def translate_compare_entries(task_id, entries, api_url, api_key, model, user_hint=""):
+    batch_size = 60
+    total_batches = max(1, (len(entries) + batch_size - 1) // batch_size)
+    hint = user_hint.strip()
 
-    model_name = opts.get("transcribe_model") or "large-v3"
-    device = opts.get("device") or "cuda"
-    language = opts.get("language") or "en"
-    model_dir = find_whisper_model_dir()
-    is_latin = language in ("auto", "en", "fr", "de", "es", "pt", "it", "nl", "pl", "ru")
-    max_line_width = "90" if is_latin else "30"
+    for offset in range(0, len(entries), batch_size):
+        batch = entries[offset:offset + batch_size]
+        batch_no = offset // batch_size + 1
+        local_task_update(
+            task_id,
+            status="running",
+            progress=88 + round(batch_no / total_batches * 8),
+            message=f"正在生成对比翻译 {batch_no}/{total_batches}...",
+        )
+        lines = "\n".join(f"{e['index']} | {e['source'].replace(chr(10), ' ')}" for e in batch)
+        prompt = f"""你是专业英文到简体中文字幕翻译助手。请把下面字幕逐行翻译成自然、简洁的中文，保留 AI、公司、产品和人名术语准确。
+不要修改英文原文，不要合并或拆分字幕。
 
-    output_srt = media_path.with_suffix(".srt")
-    cmd = [
-        cli_exe,
-        "-m", model_name,
-        "--print_progress",
-        str(media_path),
-        "-d", device,
-        "--output_format", "srt",
-        "-o", "source",
-        "--beam_size", "8",
-        "--sentence",
-        "--max_line_width", max_line_width,
-        "--max_line_count", "1",
-        "--max_comma", "20",
-        "--max_comma_cent", "50",
-        "--beep_off",
-        "--vad_filter", "true",
-        "--vad_threshold", "0.40",
-        "--vad_min_silence_duration_ms", "300",
-    ]
-    if model_dir:
-        cmd.extend(["--model_dir", model_dir])
-    if language != "auto":
-        cmd.extend(["-l", language])
-    if opts.get("initial_prompt"):
-        cmd.extend(["--initial_prompt", opts["initial_prompt"]])
+背景提示：
+{hint or "无"}
 
-    env = os.environ.copy()
-    path_parts = [str(Path(cli_exe).parent)]
-    ffmpeg_dir = find_local_ffmpeg_dir()
-    if ffmpeg_dir:
-        path_parts.append(ffmpeg_dir)
-    env["PATH"] = os.pathsep.join(path_parts + [env.get("PATH", "")])
+输入格式：
+序号 | 英文原文
 
-    local_task_update(task_id, status="running", progress=8, message="正在启动本地识别引擎...")
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+输出要求：
+- 只输出逐行结果，不要解释。
+- 每行严格使用：序号 | 中文译文
+- 输入多少行，输出多少行，序号必须一致。
+
+待翻译字幕：
+{lines}"""
+        result = call_chat_model(api_url, api_key, model, [{"role": "user", "content": prompt}])
+
+        by_index = {}
+        ordered = []
+        for line in result.splitlines():
+            match = re.match(r"^\s*(\d+)\s*\|\s*(.*?)\s*$", line)
+            if not match:
+                continue
+            idx = int(match.group(1))
+            zh = match.group(2).strip()
+            by_index[idx] = zh
+            ordered.append(zh)
+
+        for i, entry in enumerate(batch):
+            zh = by_index.get(entry["index"], ordered[i] if i < len(ordered) else "")
+            entry["translation_compare"] = zh
+
+
+VOLC_FLASH_URL = "https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash"
+VOLC_STANDARD_SUBMIT_URL = "https://openspeech.bytedance.com/api/v3/auc/bigmodel/submit"
+VOLC_STANDARD_QUERY_URL = "https://openspeech.bytedance.com/api/v3/auc/bigmodel/query"
+VOLC_SUCCESS_CODE = "20000000"
+VOLC_WAITING_CODES = {"20000001", "20000002", "20000003"}
+ONLINE_ASR_PROVIDERS = {"volc_flash", "volc_standard_url"}
+
+
+def normalize_online_asr_provider(provider):
+    provider = (provider or "volc_flash").strip()
+    return provider if provider in ONLINE_ASR_PROVIDERS else "volc_flash"
+
+
+def volc_language_code(language):
+    return {
+        "en": "en-US",
+        "zh": "zh-CN",
+        "ja": "ja-JP",
+        "ko": "ko-KR",
+        "auto": "",
+    }.get((language or "en").lower(), language or "en-US")
+
+
+def volc_json_request(url, payload, headers, timeout=120):
+    req_headers = {"Content-Type": "application/json", **headers}
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(url, data=data, headers=req_headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+            parsed = json.loads(raw) if raw.strip() else {}
+            return dict(resp.headers), parsed
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        try:
+            parsed = json.loads(raw) if raw.strip() else {}
+        except Exception:
+            parsed = {"message": raw}
+        parsed_dict = parsed if isinstance(parsed, dict) else {}
+        status_code = exc.headers.get("X-Api-Status-Code") or parsed_dict.get("code") or exc.code
+        message = (
+            exc.headers.get("X-Api-Message")
+            or parsed_dict.get("message")
+            or parsed_dict.get("error")
+            or raw
+        )
+        raise RuntimeError(f"火山识别请求失败：{status_code} {message}")
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"无法连接火山识别接口：{exc.reason}")
+
+
+def volc_status_code(headers, body):
+    body_dict = body if isinstance(body, dict) else {}
+    return str(
+        headers.get("X-Api-Status-Code")
+        or headers.get("x-api-status-code")
+        or body_dict.get("code")
+        or body_dict.get("status_code")
+        or ""
+    )
+
+
+def volc_status_message(headers, body):
+    body_dict = body if isinstance(body, dict) else {}
+    return (
+        headers.get("X-Api-Message")
+        or headers.get("x-api-message")
+        or body_dict.get("message")
+        or body_dict.get("msg")
+        or body_dict.get("error")
+        or ""
+    )
+
+
+def first_present(obj, *keys):
+    for key in keys:
+        if isinstance(obj, dict) and key in obj and obj[key] is not None:
+            return obj[key]
+    return None
+
+
+def volc_extract_text(body):
+    if not isinstance(body, dict):
+        return ""
+    result = body.get("result", body)
+    if isinstance(result, dict):
+        return result.get("text") or result.get("transcript") or body.get("text") or ""
+    if isinstance(result, list):
+        return " ".join(
+            (item.get("text") or item.get("transcript") or "").strip()
+            for item in result
+            if isinstance(item, dict)
+        ).strip()
+    return body.get("text") or ""
+
+
+def volc_extract_entries(body, offset=0.0, fallback_duration=0.0):
+    utterances = []
+
+    def collect(node):
+        if isinstance(node, dict):
+            value = node.get("utterances") or node.get("segments")
+            if isinstance(value, list):
+                utterances.extend(item for item in value if isinstance(item, dict))
+                return
+            for key in ("result", "results", "data"):
+                if key in node:
+                    collect(node[key])
+        elif isinstance(node, list):
+            for item in node:
+                collect(item)
+
+    collect(body)
+    entries = []
+    for item in utterances:
+        text = (item.get("text") or item.get("utterance") or item.get("sentence") or "").strip()
+        if not text:
+            continue
+        start_raw = first_present(item, "start_time", "start", "begin_time", "begin")
+        end_raw = first_present(item, "end_time", "end", "finish_time", "finish")
+        try:
+            start = float(start_raw) / 1000.0 if start_raw is not None else 0.0
+            end = float(end_raw) / 1000.0 if end_raw is not None else start + 3.0
+        except Exception:
+            start, end = 0.0, 3.0
+        if end <= start:
+            end = start + 3.0
+        entries.append({
+            "index": len(entries) + 1,
+            "start": offset + start,
+            "end": offset + end,
+            "source": text,
+            "translation": "",
+        })
+
+    if entries:
+        return entries
+
+    text = volc_extract_text(body).strip()
+    if text:
+        return [{
+            "index": 1,
+            "start": offset,
+            "end": offset + max(float(fallback_duration or 3), 3.0),
+            "source": text,
+            "translation": "",
+        }]
+    return []
+
+
+def probe_media_duration(media_path):
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                str(media_path),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return max(0.0, float(result.stdout.strip().splitlines()[0]))
+    except Exception:
+        pass
+    return 0.0
+
+
+def prepare_online_asr_audio(task_id, media_path, opts):
+    media_path = Path(media_path)
+    suffix = media_path.suffix.lower()
+    project_dir = Path(opts["project_dir"]) if opts.get("project_dir") else None
+    if project_dir:
+        _, subdirs = ensure_project_dirs(project_dir.name)
+        audio_dir = subdirs["audio"]
+    else:
+        audio_dir = media_path.parent
+    audio_dir.mkdir(parents=True, exist_ok=True)
+
+    if suffix == ".mp3" and media_path.stat().st_size <= 90 * 1024 * 1024:
+        return media_path
+
+    target = audio_dir / f"{sanitize_filename(media_path.stem)}.asr.mp3"
+    if target.exists() and target.stat().st_size > 0:
+        return target
+
+    local_task_update(task_id, status="running", progress=6, message="正在准备在线识别用 MP3 音频...")
+    result = subprocess.run(
+        [
+            "ffmpeg", "-y", "-i", str(media_path),
+            "-map", "0:a:0", "-vn",
+            "-c:a", "libmp3lame", "-b:a", "64k", "-ar", "16000", "-ac", "1",
+            "-id3v2_version", "3", "-write_id3v1", "1",
+            str(target),
+        ],
+        capture_output=True,
         text=True,
         encoding="utf-8",
         errors="replace",
-        env=env,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0,
+        timeout=1800,
     )
+    if result.returncode != 0 or not target.exists() or target.stat().st_size <= 0:
+        raise RuntimeError("准备在线识别音频失败，请确认 FFmpeg 可用且文件包含音轨。")
+    return target
 
-    recent = []
-    for line in proc.stdout:
-        line = line.strip()
-        if not line:
-            continue
-        recent.append(line)
-        if len(recent) > 20:
-            recent.pop(0)
-        match = re.search(r"(\d+)%", line)
-        if match:
-            pct = int(match.group(1))
-            local_task_update(
-                task_id,
-                progress=min(55, 8 + round(pct * 0.47)),
-                message=f"正在本地识别字幕... {pct}%",
-            )
 
-    proc.wait()
-    if proc.returncode != 0:
-        raise RuntimeError("本地识别失败：" + "；".join(recent[-5:]))
-    if not output_srt.exists():
-        raise RuntimeError("本地识别完成但未生成 SRT 文件。")
-    return output_srt.read_text(encoding="utf-8", errors="replace")
+def split_audio_for_volc_flash(task_id, audio_path, segment_seconds=1500):
+    audio_path = Path(audio_path)
+    duration = probe_media_duration(audio_path)
+    max_bytes = 90 * 1024 * 1024
+    if (duration and duration <= segment_seconds) and audio_path.stat().st_size <= max_bytes:
+        return [(audio_path, 0.0, duration)]
+    if not duration and audio_path.stat().st_size <= max_bytes:
+        return [(audio_path, 0.0, 0.0)]
+    if not duration:
+        raise RuntimeError("无法读取音频时长，不能安全分段在线识别。请先转成标准 MP3 后再试。")
+
+    chunk_dir = audio_path.parent / f"{sanitize_filename(audio_path.stem)}_volc_chunks"
+    chunk_dir.mkdir(parents=True, exist_ok=True)
+    chunks = []
+    start = 0.0
+    index = 0
+    while start < duration:
+        chunk = chunk_dir / f"chunk_{index:03d}.mp3"
+        local_task_update(
+            task_id,
+            status="running",
+            progress=min(18, 8 + round(start / max(duration, 1) * 10)),
+            message=f"正在切分在线识别音频 {index + 1}...",
+        )
+        result = subprocess.run(
+            [
+                "ffmpeg", "-y",
+                "-ss", str(round(start, 3)),
+                "-i", str(audio_path),
+                "-t", str(segment_seconds),
+                "-vn", "-c:a", "libmp3lame", "-b:a", "64k", "-ar", "16000", "-ac", "1",
+                "-id3v2_version", "3", "-write_id3v1", "1",
+                str(chunk),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=1800,
+        )
+        if result.returncode != 0 or not chunk.exists() or chunk.stat().st_size <= 0:
+            raise RuntimeError("切分在线识别音频失败，请检查 FFmpeg。")
+        chunks.append((chunk, start, min(segment_seconds, duration - start)))
+        start += segment_seconds
+        index += 1
+    return chunks
+
+
+def volc_flash_transcribe_chunk(chunk_path, opts):
+    api_key = (opts.get("volc_api_key") or "").strip()
+    resource_id = (opts.get("volc_resource_id") or "").strip() or "volc.bigasr.auc_turbo"
+    if not api_key:
+        raise RuntimeError("请先填写火山 API Key。")
+
+    language = volc_language_code(opts.get("language", "en"))
+    audio_payload = {
+        "data": base64.b64encode(Path(chunk_path).read_bytes()).decode("ascii"),
+        "format": "mp3",
+    }
+    if language:
+        audio_payload["language"] = language
+
+    payload = {
+        "user": {"uid": "youtube-local-subtitle"},
+        "audio": audio_payload,
+        "request": {
+            "model_name": "bigmodel",
+            "show_utterances": True,
+            "enable_punc": True,
+            "enable_itn": True,
+        },
+    }
+    headers, body = volc_json_request(
+        VOLC_FLASH_URL,
+        payload,
+        {
+            "X-Api-Key": api_key,
+            "X-Api-Resource-Id": resource_id,
+            "X-Api-Request-Id": str(uuid.uuid4()),
+        },
+        timeout=300,
+    )
+    code = volc_status_code(headers, body)
+    if code and code != VOLC_SUCCESS_CODE:
+        message = volc_status_message(headers, body) or json.dumps(body, ensure_ascii=False)[:300]
+        raise RuntimeError(f"火山在线识别失败：{code} {message}")
+    return body
+
+
+def transcribe_volc_flash_media(task_id, media_path, opts):
+    local_task_update(task_id, status="running", progress=4, message="正在准备火山在线识别...")
+    audio_path = prepare_online_asr_audio(task_id, media_path, opts)
+    segment_seconds = int(float(opts.get("volc_segment_minutes") or 25) * 60)
+    segment_seconds = max(300, min(segment_seconds, 3600))
+    chunks = split_audio_for_volc_flash(task_id, audio_path, segment_seconds=segment_seconds)
+
+    entries = []
+    for i, (chunk_path, offset, chunk_duration) in enumerate(chunks, 1):
+        local_task_update(
+            task_id,
+            status="running",
+            progress=18 + round(i / max(len(chunks), 1) * 37),
+            message=f"火山在线识别中 {i}/{len(chunks)}...",
+        )
+        body = volc_flash_transcribe_chunk(chunk_path, opts)
+        entries.extend(volc_extract_entries(body, offset=offset, fallback_duration=chunk_duration))
+
+    if not entries:
+        raise RuntimeError("火山在线识别完成，但没有返回可用字幕。")
+    entries.sort(key=lambda item: (item["start"], item["end"]))
+    for index, entry in enumerate(entries, 1):
+        entry["index"] = index
+    return entries_to_srt(entries, bilingual=False, order="en_top")
+
+
+def transcribe_volc_standard_url(task_id, opts):
+    api_key = (opts.get("volc_api_key") or "").strip()
+    resource_id = (opts.get("volc_resource_id") or "").strip() or "volc.bigasr.auc"
+    audio_url = (opts.get("volc_audio_url") or "").strip()
+    if not api_key:
+        raise RuntimeError("请先填写火山 API Key。")
+    if not audio_url:
+        raise RuntimeError("火山标准版需要可公网访问的音频 URL；本地文件直传请选“火山极速版”。")
+
+    request_id = str(uuid.uuid4())
+    language = volc_language_code(opts.get("language", "en"))
+    payload = {
+        "user": {"uid": "youtube-local-subtitle"},
+        "audio": {"url": audio_url, "format": "mp3"},
+        "request": {
+            "model_name": "bigmodel",
+            "show_utterances": True,
+            "enable_punc": True,
+            "enable_itn": True,
+        },
+    }
+    if language:
+        payload["audio"]["language"] = language
+
+    local_task_update(task_id, status="running", progress=8, message="正在提交火山标准版识别任务...")
+    headers, body = volc_json_request(
+        VOLC_STANDARD_SUBMIT_URL,
+        payload,
+        {
+            "X-Api-Key": api_key,
+            "X-Api-Resource-Id": resource_id,
+            "X-Api-Request-Id": request_id,
+            "X-Api-Sequence": "-1",
+        },
+        timeout=120,
+    )
+    code = volc_status_code(headers, body)
+    if code and code != VOLC_SUCCESS_CODE:
+        raise RuntimeError(f"火山标准版提交失败：{code} {volc_status_message(headers, body)}")
+
+    for poll in range(1, 721):
+        time.sleep(5)
+        local_task_update(
+            task_id,
+            status="running",
+            progress=min(55, 10 + poll // 4),
+            message=f"正在查询火山标准版识别结果 {poll}...",
+        )
+        headers, body = volc_json_request(
+            VOLC_STANDARD_QUERY_URL,
+            {},
+            {
+                "X-Api-Key": api_key,
+                "X-Api-Resource-Id": resource_id,
+                "X-Api-Request-Id": request_id,
+                "X-Api-Sequence": "-1",
+            },
+            timeout=120,
+        )
+        code = volc_status_code(headers, body)
+        if code == VOLC_SUCCESS_CODE or not code:
+            entries = volc_extract_entries(body)
+            if entries:
+                return entries_to_srt(entries, bilingual=False, order="en_top")
+        if code not in VOLC_WAITING_CODES:
+            raise RuntimeError(f"火山标准版查询失败：{code} {volc_status_message(headers, body)}")
+    raise RuntimeError("火山标准版识别超时，请稍后在控制台确认任务状态。")
+
+
+def transcribe_media(task_id, media_path, opts):
+    provider = normalize_online_asr_provider(opts.get("asr_provider"))
+    if provider == "volc_flash":
+        return transcribe_volc_flash_media(task_id, media_path, opts)
+    if provider == "volc_standard_url":
+        return transcribe_volc_standard_url(task_id, opts)
+    raise RuntimeError("请选择火山极速版或火山标准版 URL。")
 
 
 def run_local_subtitle_task(task_id, media_path, original_name, opts):
     try:
-        local_task_update(task_id, status="running", progress=2, message="正在准备本地视频...")
-        srt_text = transcribe_local_media(task_id, media_path, opts)
+        local_task_update(task_id, status="running", progress=2, message="正在准备在线识别...")
+        srt_text = transcribe_media(task_id, media_path, opts)
         entries = parse_srt_content(srt_text)
         if not entries:
             raise RuntimeError("未识别出可用字幕。")
@@ -1211,19 +2163,37 @@ def run_local_subtitle_task(task_id, media_path, original_name, opts):
                 encoding="utf-8",
             )
 
+        local_task_update(task_id, progress=55, message="正在合并短句并智能分段...")
+        entries, merged_count = merge_local_short_entries(entries)
+        entries, split_count, _ = split_long_subtitle_entries(entries)
+        if translation_dir:
+            stem = sanitize_filename(Path(original_name).stem or "local_video")
+            prepared_name = "split_en.srt" if split_count else "merged_en.srt"
+            (translation_dir / prepared_name).write_text(
+                entries_to_srt([{**e, "translation": ""} for e in entries], bilingual=False),
+                encoding="utf-8",
+            )
+
         api_url = opts.get("api_url", "").strip()
         api_key = opts.get("api_key", "").strip()
         model = opts.get("model", "").strip()
         if not api_url or not api_key or not model:
             raise RuntimeError("请填写 API 地址、API Key 和模型名后再翻译。")
 
-        local_task_update(task_id, progress=56, message="正在用大模型分析识别错误...")
+        local_task_update(task_id, progress=58, message="正在用大模型分析识别错误...")
         corrections = analyze_asr_corrections(
             entries, api_url, api_key, model, opts.get("prompt", "")
         )
         applied = apply_asr_corrections(entries, corrections)
 
         translate_local_entries(task_id, entries, api_url, api_key, model, opts.get("prompt", ""))
+        if opts.get("compare_enabled"):
+            cmp_api_url = opts.get("compare_api_url", "").strip()
+            cmp_api_key = opts.get("compare_api_key", "").strip()
+            cmp_model = opts.get("compare_model", "").strip()
+            if not cmp_api_url or not cmp_api_key or not cmp_model:
+                raise RuntimeError("已开启对比翻译，请填写对比翻译 API 地址、Key 和模型名。")
+            translate_compare_entries(task_id, entries, cmp_api_url, cmp_api_key, cmp_model, opts.get("prompt", ""))
 
         local_task_update(task_id, progress=94, message="正在导出字幕文件...")
         bilingual = opts.get("output_mode", "bilingual") == "bilingual"
@@ -1242,18 +2212,27 @@ def run_local_subtitle_task(task_id, media_path, original_name, opts):
             "entries": entries,
             "project_dir": str(project_dir) if project_dir else "",
             "translation_dir": str(translation_dir) if translation_dir else "",
+            "source_path": opts.get("source_path") or media_path,
         }
         save_session_translation_artifacts(session, stem)
+        session_id = create_local_session(
+            original_name,
+            entries,
+            project_dir=project_dir,
+            translation_dir=translation_dir,
+            source_path=opts.get("source_path") or media_path,
+        )
 
         local_task_update(
             task_id,
             status="completed",
             progress=100,
-            message=f"完成：{len(entries)} 条字幕，应用 {applied} 处校正",
+            message=f"完成：{len(entries)} 条字幕，合并 {merged_count} 处，智能分段 {split_count} 处，应用 {applied} 处校正",
             file=rel_download_path(output_path),
             url=f"/files/{rel_download_path(output_path)}",
             corrections=corrections,
             segments=len(entries),
+            session_id=session_id,
         )
     except Exception as e:
         local_task_update(task_id, status="error", message=str(e), error=str(e))
@@ -1267,8 +2246,8 @@ def run_local_subtitle_task(task_id, media_path, original_name, opts):
 
 def run_local_import_task(task_id, media_path, original_name, opts):
     try:
-        local_task_update(task_id, status="running", progress=2, message="正在识别本地音视频...")
-        srt_text = transcribe_local_media(task_id, media_path, opts)
+        local_task_update(task_id, status="running", progress=2, message="正在通过在线 API 识别音视频...")
+        srt_text = transcribe_media(task_id, media_path, opts)
         entries = parse_srt_content(srt_text)
         if not entries:
             raise RuntimeError("未识别出可用字幕。")
@@ -1319,6 +2298,13 @@ def run_local_translate_task(task_id, session_id, opts):
             raise RuntimeError("请填写 API 地址、API Key 和模型名后再翻译。")
         local_task_update(task_id, status="running", progress=3, message="正在准备翻译...")
         translate_local_entries(task_id, entries, api_url, api_key, model, opts.get("prompt", ""))
+        if opts.get("compare_enabled"):
+            cmp_api_url = opts.get("compare_api_url", "").strip()
+            cmp_api_key = opts.get("compare_api_key", "").strip()
+            cmp_model = opts.get("compare_model", "").strip()
+            if not cmp_api_url or not cmp_api_key or not cmp_model:
+                raise RuntimeError("已开启对比翻译，请填写对比翻译 API 地址、Key 和模型名。")
+            translate_compare_entries(task_id, entries, cmp_api_url, cmp_api_key, cmp_model, opts.get("prompt", ""))
         with local_subtitle_lock:
             if session_id in local_subtitle_sessions:
                 local_subtitle_sessions[session_id]["entries"] = entries
@@ -1415,26 +2401,52 @@ def get_format_string(codec, quality):
 
 def run_download(task_id, url, options):
     cmd = ["yt-dlp", "--no-warnings", "--ignore-errors", "--js-runtimes", "node", "--remote-components", "ejs:github"]
+    download_type = options.get("type", "video")
+    raw_items = options.get("download_items") or {}
+    legacy_items = not isinstance(raw_items, dict) or not raw_items
+    if not isinstance(raw_items, dict):
+        raw_items = {}
+    want_video = bool(raw_items.get("video", download_type == "video"))
+    want_audio = bool(raw_items.get("audio", download_type == "audio"))
+    if legacy_items and download_type == "video":
+        want_audio = True
+    want_cover = bool(raw_items.get("cover", True))
+    want_description = bool(raw_items.get("description", True))
+    want_link_title = bool(raw_items.get("link_title", True))
+
     info = fetch_video_info(url)
     project_title = info.get("title") or options.get("project_title") or "untitled_video"
     project_dir, project_subdirs = ensure_project_dirs(project_title)
-    timeline = extract_timeline_from_info(info, get_subtitle_timeline(url))
-    write_project_notes(project_dir, project_subdirs, info, url, timeline)
+    timeline = extract_timeline_from_info(
+        info,
+        get_subtitle_timeline(url) if want_description else "",
+    )
+    write_project_notes(
+        project_dir,
+        project_subdirs,
+        info,
+        url,
+        timeline,
+        save_description=want_description,
+        save_link_title=want_link_title,
+    )
     output_template = str(project_dir / "%(title)s.%(ext)s")
 
-    download_type = options.get("type", "video")
     quality = options.get("quality", "1080")
-    audio_format = options.get("audio_format", "mp3")
+    video_format = str(options.get("video_format", "mp4") or "mp4").lower()
+    if video_format not in {"mp4"}:
+        video_format = "mp4"
+    audio_format = normalize_audio_format(options.get("audio_format", "mp3"))
     codec = options.get("codec", "best")
-    dual_sub = options.get("dual_subtitle", False)
+    dual_sub = bool(options.get("dual_subtitle", False) and want_video)
     sub_opts = options.get("sub_options", {})
 
-    if download_type == "audio":
+    if want_audio and not want_video:
         cmd += ["-x", f"--audio-format={audio_format}", "--audio-quality=0"]
-    else:
+    elif want_video:
         format_id = options.get("format_id")
         if format_id:
-            cmd += ["-f", format_id, "--merge-output-format", "mp4"]
+            cmd += ["-f", format_id, "--merge-output-format", video_format]
         else:
             h = f"[height<={quality}]" if quality != "best" else ""
             cmd += ["-f", f"bv*{h}+ba/b{h}"]
@@ -1448,7 +2460,7 @@ def run_download(task_id, url, options):
                 sort_parts.append("vcodec:av1")
             sort_parts += ["vbr", "abr"]
             cmd += ["-S", ",".join(sort_parts)]
-            cmd += ["--merge-output-format", "mp4"]
+            cmd += ["--merge-output-format", video_format]
 
         if dual_sub:
             sub_mode = options.get("sub_options", {}).get("sub_mode", "zh_en")
@@ -1463,16 +2475,17 @@ def run_download(task_id, url, options):
                 "--write-subs", "--write-auto-subs",
                 f"--sub-langs={sub_langs}", "--embed-subs",
             ]
+    else:
+        cmd += ["--skip-download"]
 
-    cmd += [
-        "--write-thumbnail",
-        "--write-description",
-        "--write-info-json",
-        "--newline",
-        "--progress",
-        "-o", output_template,
-        url,
-    ]
+    if want_cover:
+        cmd.append("--write-thumbnail")
+    if want_description:
+        cmd.append("--write-description")
+    if want_link_title:
+        cmd.append("--write-info-json")
+
+    cmd += ["--newline", "--progress", "-o", output_template, url]
 
     def update(status, progress=None, message=None, files=None):
         with task_lock:
@@ -1537,18 +2550,20 @@ def run_download(task_id, url, options):
         for f in project_dir.glob("*.part"):
             f.unlink(missing_ok=True)
 
-        # yt-dlp may return non-zero if subtitle download fails (e.g. 429)
-        # but the video itself might still be downloaded successfully
-        has_video = download_type == "audio" or any(project_dir.glob("*.mp4"))
+        # yt-dlp may return non-zero if subtitle/metadata download fails,
+        # but requested media might still have been written successfully.
+        has_video = any(project_dir.glob("*.mp4"))
+        audio_exts = {".mp3", ".m4a", ".wav", ".aac", ".flac", ".opus", ".ogg"}
+        has_audio = any(f.is_file() and f.suffix.lower() in audio_exts for f in project_dir.iterdir())
 
-        if process.returncode == 0 or has_video:
-            if download_type == "video":
+        if process.returncode == 0 or (want_video and has_video) or (want_audio and has_audio):
+            if want_video and has_video:
                 if options.get("ae_compat"):
                     fix_video_for_ae(project_dir, update)
                 else:
                     fix_audio_codec(project_dir, update)
 
-            if dual_sub:
+            if want_video and dual_sub:
                 update("downloading", 95, "Processing dual subtitles...")
                 ass_name = process_dual_subtitles(project_dir, sub_opts, update)
                 if options.get("burn_sub") and ass_name:
@@ -1556,8 +2571,9 @@ def run_download(task_id, url, options):
                     burn_subtitles_to_video(project_dir, ass_name, update)
                 elif ass_name:
                     update("downloading", 99, f"Subtitle file generated")
-            if download_type == "video":
-                ensure_audio_from_video(project_dir, project_subdirs, update)
+            if want_video and want_audio:
+                ensure_audio_from_video(project_dir, project_subdirs, audio_format, update)
+            standardize_project_mp3_files(project_dir, update)
             move_project_outputs(project_dir, project_subdirs)
             update("completed", 100, f"Download complete: {project_dir.name}", list_downloaded_files())
         else:
@@ -1583,7 +2599,7 @@ def list_downloaded_files():
                 "name": rel_name,
                 "size": round(size_mb, 2),
                 "ext": f.suffix.lstrip('.'),
-                "url": f"/files/{rel_name}",
+                "url": f"/files/{urllib.parse.quote(rel_name, safe='/')}",
             })
     return files
 
@@ -1595,18 +2611,20 @@ def index():
 
 @app.route("/api/local-subtitle/capabilities")
 def local_subtitle_capabilities():
-    model_dir = find_whisper_model_dir()
-    models = []
-    if model_dir:
-        for item in Path(model_dir).iterdir():
-            if item.is_dir() and item.name.startswith("faster-whisper-"):
-                if (item / "model.bin").exists():
-                    models.append(item.name.replace("faster-whisper-", ""))
     return jsonify({
-        "cli_available": bool(find_whisper_cli()),
-        "cli_path": find_whisper_cli(),
-        "model_dir": model_dir,
-        "models": sorted(models),
+        "local_asr": False,
+        "online_asr": {
+            "volc_flash": {
+                "name": "火山极速版",
+                "resource_id": "volc.bigasr.auc_turbo",
+                "local_file": True,
+            },
+            "volc_standard_url": {
+                "name": "火山标准版 URL",
+                "resource_id": "volc.bigasr.auc",
+                "local_file": False,
+            },
+        },
     })
 
 
@@ -1652,8 +2670,11 @@ def import_local_subtitle():
     upload.save(media_path)
 
     opts = {
-        "transcribe_model": request.form.get("transcribe_model", "large-v3"),
-        "device": request.form.get("device", "cuda"),
+        "asr_provider": normalize_online_asr_provider(request.form.get("asr_provider")),
+        "volc_api_key": request.form.get("volc_api_key", ""),
+        "volc_resource_id": request.form.get("volc_resource_id", ""),
+        "volc_audio_url": request.form.get("volc_audio_url", ""),
+        "volc_segment_minutes": request.form.get("volc_segment_minutes", "25"),
         "language": request.form.get("language", "en"),
         "initial_prompt": request.form.get("initial_prompt", ""),
         "project_dir": str(project_dir),
@@ -1689,6 +2710,39 @@ def get_local_subtitle_session(session_id):
     return jsonify(local_session_payload(session))
 
 
+@app.route("/api/local-subtitle/clip-source", methods=["POST"])
+def upload_clip_source():
+    data = request.json or {}
+    raw_path = (data.get("video_path") or "").strip().strip('"')
+    if not raw_path:
+        return jsonify({"error": "请填写本地视频路径"}), 400
+    video_path = Path(raw_path).expanduser()
+    if not video_path.exists() or not video_path.is_file():
+        return jsonify({"error": "视频路径不存在，请检查路径是否完整"}), 400
+    if not is_video_file(video_path):
+        return jsonify({"error": "切片路径只支持视频文件"}), 400
+
+    original_name = video_path.name
+    project_title = data.get("project_title", "").strip() or video_path.stem or "clip_source"
+    clip_output_dir = default_original_clip_dir(video_path)
+    session_id = create_local_session(
+        original_name,
+        [],
+        project_dir=None,
+        translation_dir=clip_output_dir,
+        source_path=video_path,
+    )
+    with local_subtitle_lock:
+        local_subtitle_sessions[session_id]["clip_source_mode"] = "path"
+        local_subtitle_sessions[session_id]["clip_output_dir"] = str(clip_output_dir)
+        local_subtitle_sessions[session_id]["project_title"] = project_title
+    payload = local_session_payload(get_local_session(session_id))
+    payload["clip_source"] = True
+    payload["source_path"] = str(video_path)
+    payload["clip_output_dir"] = str(clip_output_dir)
+    return jsonify(payload)
+
+
 @app.route("/api/local-subtitle/merge", methods=["POST"])
 def merge_local_subtitle():
     data = request.json or {}
@@ -1706,6 +2760,40 @@ def merge_local_subtitle():
         local_subtitle_sessions[session["id"]]["entries"] = entries
     payload = local_session_payload(get_local_session(session["id"]))
     payload["merged"] = changed
+    return jsonify(payload)
+
+
+@app.route("/api/local-subtitle/split", methods=["POST"])
+def split_local_subtitle():
+    data = request.json or {}
+    session = get_local_session(data.get("session_id", ""))
+    if not session:
+        return jsonify({"error": "字幕会话不存在"}), 404
+
+    entries, changed, cleared = split_long_subtitle_entries(
+        session["entries"],
+        max_chars_latin=int(data.get("max_chars_latin", 84)),
+        max_chars_cjk=int(data.get("max_chars_cjk", 42)),
+    )
+    with local_subtitle_lock:
+        local_subtitle_sessions[session["id"]]["entries"] = entries
+        local_subtitle_sessions[session["id"]]["corrections"] = []
+        session = local_subtitle_sessions[session["id"]]
+
+    translation_dir = session.get("translation_dir")
+    if translation_dir:
+        out_dir = Path(translation_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        stem = sanitize_filename(Path(session.get("name") or "subtitle").stem) or "subtitle"
+        source_entries = [{**e, "translation": ""} for e in entries]
+        (out_dir / f"{stem}.split_en.srt").write_text(
+            entries_to_srt(source_entries, bilingual=False),
+            encoding="utf-8",
+        )
+
+    payload = local_session_payload(session)
+    payload["split"] = changed
+    payload["cleared_translations"] = cleared
     return jsonify(payload)
 
 
@@ -1770,6 +2858,10 @@ def translate_local_subtitle_session():
         "api_key": data.get("api_key", ""),
         "model": data.get("model", ""),
         "prompt": data.get("prompt", ""),
+        "compare_enabled": bool(data.get("compare_enabled", False)),
+        "compare_api_url": data.get("compare_api_url", ""),
+        "compare_api_key": data.get("compare_api_key", ""),
+        "compare_model": data.get("compare_model", ""),
     }
     threading.Thread(
         target=run_local_translate_task,
@@ -1812,6 +2904,61 @@ def export_local_subtitle():
     return jsonify({"file": rel_download_path(output_path), "url": f"/files/{rel_download_path(output_path)}"})
 
 
+@app.route("/api/local-subtitle/clips", methods=["POST"])
+def export_local_video_clips():
+    data = request.json or {}
+    session = get_local_session(data.get("session_id", ""))
+    if not session:
+        return jsonify({"error": "请先读取上传的视频"}), 404
+    clips = data.get("clips") or []
+    if not isinstance(clips, list) or not clips:
+        return jsonify({"error": "请至少添加一个切片时间段"}), 400
+
+    task_id = str(uuid.uuid4())[:8]
+    with local_subtitle_lock:
+        local_subtitle_tasks[task_id] = {
+            "id": task_id,
+            "status": "queued",
+            "progress": 0,
+            "message": "已加入切片队列...",
+            "session_id": session["id"],
+            "clips": [],
+        }
+    threading.Thread(
+        target=run_local_clip_task,
+        args=(task_id, session["id"], clips),
+        daemon=True,
+    ).start()
+    return jsonify({"task_id": task_id})
+
+
+@app.route("/api/test-chat-api", methods=["POST"])
+def test_chat_api():
+    data = request.json or {}
+    api_url = data.get("api_url", "").strip()
+    api_key = data.get("api_key", "").strip()
+    model = data.get("model", "").strip()
+    if not api_url or not api_key or not model:
+        return jsonify({"error": "请填写翻译 API 地址、Key 和模型名"}), 400
+    try:
+        reply = call_chat_model(
+            api_url,
+            api_key,
+            model,
+            [
+                {"role": "system", "content": "Reply with exactly: OK"},
+                {"role": "user", "content": "API test. Reply OK."},
+            ],
+        )
+        return jsonify({
+            "ok": True,
+            "message": "翻译 API 可用",
+            "reply": reply[:120],
+        })
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
 @app.route("/api/local-subtitle/start", methods=["POST"])
 def start_local_subtitle():
     if "file" not in request.files:
@@ -1846,8 +2993,15 @@ def start_local_subtitle():
         "api_key": api_key,
         "model": model,
         "prompt": request.form.get("prompt", ""),
-        "transcribe_model": request.form.get("transcribe_model", "large-v3"),
-        "device": request.form.get("device", "cuda"),
+        "compare_enabled": request.form.get("compare_enabled") == "1",
+        "compare_api_url": request.form.get("compare_api_url", ""),
+        "compare_api_key": request.form.get("compare_api_key", ""),
+        "compare_model": request.form.get("compare_model", ""),
+        "asr_provider": normalize_online_asr_provider(request.form.get("asr_provider")),
+        "volc_api_key": request.form.get("volc_api_key", ""),
+        "volc_resource_id": request.form.get("volc_resource_id", ""),
+        "volc_audio_url": request.form.get("volc_audio_url", ""),
+        "volc_segment_minutes": request.form.get("volc_segment_minutes", "25"),
         "language": request.form.get("language", "en"),
         "output_mode": request.form.get("output_mode", "bilingual"),
         "order": request.form.get("order", "en_top"),
@@ -1900,6 +3054,15 @@ def start_download():
     if not re.search(yt_pattern, url):
         return jsonify({"error": "Please provide a valid YouTube URL"}), 400
 
+    download_items = data.get("download_items") or {}
+    if download_items and isinstance(download_items, dict):
+        allowed_items = ("video", "audio", "cover", "description", "link_title")
+        download_items = {key: bool(download_items.get(key)) for key in allowed_items}
+        if not any(download_items.values()):
+            return jsonify({"error": "请至少选择一个下载内容"}), 400
+    else:
+        download_items = {}
+
     task_id = str(uuid.uuid4())[:8]
     with task_lock:
         tasks[task_id] = {
@@ -1913,7 +3076,9 @@ def start_download():
 
     options = {
         "type": data.get("type", "video"),
+        "download_items": download_items,
         "quality": data.get("quality", "1080"),
+        "video_format": data.get("video_format", "mp4"),
         "audio_format": data.get("audio_format", "mp3"),
         "codec": data.get("codec", "best"),
         "subtitles": data.get("subtitles", False),
@@ -1932,7 +3097,7 @@ def start_download():
             "bg_enabled": data.get("bg_enabled", False),
             "bg_color": data.get("bg_color", "#000000"),
             "bg_opacity": int(data.get("bg_opacity", 50)),
-            "bg_radius": int(data.get("bg_radius", 0)),
+            "bg_radius": int(data.get("bg_radius", 30)),
             "bg_width": int(data.get("bg_width", 80)),
             "bg_height": int(data.get("bg_height", 20)),
             "bg_offset_x": int(data.get("bg_offset_x", 0)),
@@ -2115,10 +3280,25 @@ def delete_file(filename):
 
 @app.route("/api/clear", methods=["POST"])
 def clear_files():
-    for f in DOWNLOADS_DIR.iterdir():
-        if f.is_file():
-            f.unlink(missing_ok=True)
-    return jsonify({"ok": True})
+    removed = 0
+    ignored = {"_local_tasks", "__pycache__"}
+    for item in DOWNLOADS_DIR.iterdir():
+        if item.name in ignored or item.name.startswith("."):
+            continue
+        if item.is_dir():
+            shutil.rmtree(item, ignore_errors=True)
+            removed += 1
+        elif item.is_file():
+            item.unlink(missing_ok=True)
+            removed += 1
+    DOWNLOADS_DIR.mkdir(exist_ok=True)
+    PROJECTS_DIR.mkdir(exist_ok=True)
+    with local_subtitle_lock:
+        local_subtitle_sessions.clear()
+        local_subtitle_tasks.clear()
+    with task_lock:
+        tasks.clear()
+    return jsonify({"ok": True, "removed": removed})
 
 
 @app.route("/api/fetch-desc", methods=["POST"])
