@@ -225,7 +225,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
     <div class="url-row">
       <input type="text" id="urlInput" placeholder="粘贴 YouTube 视频链接..." autocomplete="off">
         <button class="btn btn-secondary" id="fmtBtn" onclick="queryFormats()" title="查询当前链接可用的视频、音频和合并格式，适合手动选择清晰度。">查看格式</button>
-        <button class="btn btn-secondary" id="thumbBtn" onclick="downloadThumbnail()" title="只下载当前视频封面，不下载视频或音频。">封面</button>
+        <button class="btn btn-secondary" id="thumbBtn" onclick="downloadThumbnail()" title="只下载当前视频封面，不下载视频或音频；保存为 JPEG。">封面</button>
         <button class="btn btn-primary" id="dlBtn" onclick="startDownload()" title="按上方勾选内容下载视频、音频、封面、简介和链接标题。">下载</button>
     </div>
 
@@ -235,7 +235,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
         <div class="content-checks" id="downloadContentGroup">
           <label class="check-pill"><input type="checkbox" id="downloadVideo" onchange="toggleType()" checked>视频</label>
           <label class="check-pill"><input type="checkbox" id="downloadAudio" onchange="toggleType()" checked>音频</label>
-          <label class="check-pill"><input type="checkbox" id="downloadCover" checked>封面</label>
+          <label class="check-pill" title="下载视频封面，并统一转换为 JPEG。"><input type="checkbox" id="downloadCover" checked>封面</label>
           <label class="check-pill"><input type="checkbox" id="downloadDescription" checked>简介</label>
           <label class="check-pill"><input type="checkbox" id="downloadLinkTitle" checked>链接标题</label>
         </div>

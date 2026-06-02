@@ -267,6 +267,42 @@ def move_project_outputs(project_dir, subdirs):
                 pass
 
 
+def normalize_cover_images_to_jpeg(source_dir, update=None):
+    """Convert downloaded thumbnails to .jpeg so cover output is predictable."""
+    converted = []
+    image_suffixes = {".webp", ".png", ".jpg", ".jpeg"}
+    for image in sorted(Path(source_dir).glob("*")):
+        if not image.is_file() or image.suffix.lower() not in image_suffixes:
+            continue
+        if image.suffix.lower() == ".jpeg":
+            converted.append(image)
+            continue
+
+        target = image.with_suffix(".jpeg")
+        if target.exists():
+            target = image.with_name(f"{image.stem}.{int(time.time())}.jpeg")
+        if update:
+            update("downloading", 98, f"Converting cover to JPEG: {image.name}")
+        result = subprocess.run(
+            [
+                "ffmpeg", "-y", "-i", str(image),
+                "-frames:v", "1", "-q:v", "2",
+                str(target),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=120,
+        )
+        if result.returncode == 0 and target.exists() and target.stat().st_size > 0:
+            image.unlink(missing_ok=True)
+            converted.append(target)
+        else:
+            target.unlink(missing_ok=True)
+    return converted
+
+
 def find_primary_video(search_dir):
     candidates = [
         p for p in search_dir.rglob("*")
@@ -2602,6 +2638,8 @@ def run_download(task_id, url, options):
                 ensure_audio_from_video(project_dir, project_subdirs, audio_format, update)
             standardize_project_mp3_files(project_dir, update)
             move_project_outputs(project_dir, project_subdirs)
+            if want_cover:
+                normalize_cover_images_to_jpeg(project_subdirs["source"], update)
             update("completed", 100, f"Download complete: {project_dir.name}", list_downloaded_files())
         else:
             update("error", message=f"Download failed (exit code {process.returncode}): {'; '.join(last_lines[-5:])}")
@@ -3271,13 +3309,20 @@ def download_thumbnail():
         raw_path = DOWNLOADS_DIR / f"{title}_thumb_raw"
         urllib.request.urlretrieve(thumb_url, str(raw_path))
 
-        # Convert to JPG with ffmpeg
-        thumb_path = DOWNLOADS_DIR / f"{title}.jpg"
-        subprocess.run(
-            ["ffmpeg", "-y", "-i", str(raw_path), "-q:v", "2", str(thumb_path)],
-            capture_output=True, timeout=30,
+        # Convert to JPEG with ffmpeg
+        thumb_path = DOWNLOADS_DIR / f"{title}.jpeg"
+        convert = subprocess.run(
+            ["ffmpeg", "-y", "-i", str(raw_path), "-frames:v", "1", "-q:v", "2", str(thumb_path)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
         )
         raw_path.unlink(missing_ok=True)
+        if convert.returncode != 0 or not thumb_path.exists() or thumb_path.stat().st_size <= 0:
+            thumb_path.unlink(missing_ok=True)
+            return jsonify({"error": convert.stderr[-300:] or "Failed to convert thumbnail to JPEG"}), 500
 
         return jsonify({
             "saved": thumb_path.name,

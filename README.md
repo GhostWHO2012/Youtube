@@ -6,6 +6,7 @@
 
 - 下载视频和说明信息。
 - 下载内容可按复选框分别选择：视频、音频、封面、简介、链接标题。
+- 封面统一输出为 JPEG，保存在 `00_source`。
 - 音频统一输出兼容 Windows 播放器的 MP3，保存在 `02_audio`。
 - 生成中英双语字幕。
 - 烧录字幕到视频。
@@ -61,7 +62,7 @@ downloads/projects/视频标题/
 主要子目录：
 
 ```text
-00_source       原始信息、封面、info.json
+00_source       原始信息、JPEG 封面、info.json
 01_video        源视频
 02_audio        下载或抽取的音频
 03_subtitles    平台字幕、原始识别字幕
