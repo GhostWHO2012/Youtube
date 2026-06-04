@@ -34,12 +34,24 @@ PROJECTS_DIR = DOWNLOADS_DIR / "projects"
 PROJECTS_DIR.mkdir(exist_ok=True)
 
 PROJECT_SUBDIRS = {
+    "source": "00_源文件",
+    "video": "01_视频",
+    "audio": "02_音频",
+    "subtitles": "03_字幕",
+    "description": "04_简介",
+    "translation": "10_翻译",
+    "burned": "30_烧录",
+    "clips": "40_切片",
+}
+
+LEGACY_PROJECT_SUBDIRS = {
     "source": "00_source",
     "video": "01_video",
     "audio": "02_audio",
     "subtitles": "03_subtitles",
     "description": "04_description",
     "translation": "10_translation",
+    "burned": "30_burned",
     "clips": "40_clips",
 }
 
@@ -60,6 +72,28 @@ def project_safe_name(name):
     return safe[:120] or f"project_{time.strftime('%Y%m%d_%H%M%S')}"
 
 
+def normalize_local_project_title(title="", original_name="", fallback="local_video"):
+    base = (title or "").strip()
+    if not base and original_name:
+        base = Path(original_name).stem
+    base = base or fallback
+    base = re.sub(r"\s+", " ", base).strip().strip(".")
+    for _ in range(4):
+        cleaned = re.sub(r"(?i)\.(audio|source|video)$", "", base).strip().strip(".")
+        if cleaned == base:
+            break
+        base = cleaned
+    return base or fallback
+
+
+def local_media_output_stem(name="", fallback="subtitle"):
+    raw = Path(str(name or "")).stem if name else ""
+    raw = re.sub(r"(?i)\.local\.(bilingual(?:\.(en-top|zh-top))?|zh|en)$", "", raw)
+    raw = re.sub(r"(?i)\.(raw_en|split_en|merged_en|corrected_en|compare_zh|zh)$", "", raw)
+    stem = normalize_local_project_title(raw, "", fallback)
+    return sanitize_filename(stem) or fallback
+
+
 def ensure_project_dirs(title):
     project_dir = PROJECTS_DIR / project_safe_name(title)
     project_dir.mkdir(parents=True, exist_ok=True)
@@ -69,6 +103,25 @@ def ensure_project_dirs(title):
         path.mkdir(parents=True, exist_ok=True)
         subdirs[key] = path
     return project_dir, subdirs
+
+
+def project_subdir_candidates(project_dir, key, create_primary=False):
+    project_dir = Path(project_dir)
+    names = [PROJECT_SUBDIRS.get(key), LEGACY_PROJECT_SUBDIRS.get(key)]
+    paths = []
+    for name in names:
+        if not name:
+            continue
+        path = project_dir / name
+        if path not in paths:
+            paths.append(path)
+    if create_primary and paths:
+        paths[0].mkdir(parents=True, exist_ok=True)
+    return paths
+
+
+def project_subdir(project_dir, key):
+    return project_subdir_candidates(project_dir, key, create_primary=True)[0]
 
 
 def rel_download_path(path):
@@ -396,7 +449,7 @@ def save_session_translation_artifacts(session, stem="subtitle"):
         return {}
     translation_dir = Path(translation_dir)
     translation_dir.mkdir(parents=True, exist_ok=True)
-    stem = sanitize_filename(Path(stem or session.get("name") or "subtitle").stem) or "subtitle"
+    stem = local_media_output_stem(stem or session.get("name"), "subtitle")
     entries = session.get("entries", [])
     outputs = {}
     source_entries = [{**e, "translation": ""} for e in entries]
@@ -1202,18 +1255,25 @@ def parse_srt_content(content):
     content = content.replace("\r\n", "\n").replace("\r", "\n").strip()
     if not content:
         return entries
+    if content.startswith("WEBVTT"):
+        content = re.sub(r"^WEBVTT[^\n]*(?:\n+)", "", content, count=1).strip()
     blocks = re.split(r"\n\s*\n", content)
     for block in blocks:
         lines = [line.strip() for line in block.split("\n") if line.strip()]
-        if len(lines) < 3 or "-->" not in lines[1]:
+        time_idx = None
+        for idx, line in enumerate(lines[:2]):
+            if "-->" in line:
+                time_idx = idx
+                break
+        if time_idx is None or len(lines) <= time_idx + 1:
             continue
         try:
-            start_raw, end_raw = lines[1].split("-->", 1)
+            start_raw, end_raw = lines[time_idx].split("-->", 1)
             entries.append({
                 "index": len(entries) + 1,
                 "start": parse_time(start_raw.strip()),
                 "end": parse_time(end_raw.strip().split()[0]),
-                "source": "\n".join(lines[2:]).strip(),
+                "source": "\n".join(lines[time_idx + 1:]).strip(),
                 "translation": "",
             })
         except Exception:
@@ -1241,6 +1301,226 @@ def entries_to_srt(entries, bilingual=True, order="en_top"):
             f"{text}\n"
         )
     return "\n".join(blocks)
+
+
+def is_video_source_candidate(path):
+    name = Path(path).name.lower()
+    if not is_video_file(path):
+        return False
+    blocked = (".hardsub", ".translated", ".翻译字幕", ".burned", ".ae.")
+    if any(mark in name for mark in blocked):
+        return False
+    if name.startswith("clip_") or "_clips" in name:
+        return False
+    return True
+
+
+def newest_file(paths):
+    files = [Path(path) for path in paths if Path(path).exists() and Path(path).is_file()]
+    if not files:
+        return None
+    return max(files, key=lambda p: p.stat().st_mtime)
+
+
+def find_project_source_video(project_dir):
+    candidates = []
+    for folder in project_subdir_candidates(project_dir, "video"):
+        if folder.exists():
+            candidates.extend(p for p in folder.rglob("*") if p.is_file() and is_video_source_candidate(p))
+    if not candidates:
+        candidates.extend(
+            p for p in Path(project_dir).rglob("*")
+            if p.is_file()
+            and is_video_source_candidate(p)
+            and not any(part in {"30_烧录", "30_burned", "40_切片", "40_clips"} for part in p.parts)
+        )
+    return newest_file(candidates)
+
+
+def is_translated_subtitle_candidate(path):
+    path = Path(path)
+    if path.suffix.lower() not in {".srt", ".vtt"}:
+        return False
+    name = path.name.lower()
+    if any(mark in name for mark in ("raw_en", "split_en", "merged_en", "corrected_en")):
+        return False
+    translated_marks = ("bilingual", ".zh.", "zh-top", "en-top", "compare_zh")
+    if any(mark in name for mark in translated_marks):
+        return True
+    try:
+        return contains_cjk(path.read_text(encoding="utf-8", errors="replace")[:4000])
+    except Exception:
+        return False
+
+
+def find_project_translated_subtitle(project_dir):
+    candidates = []
+    for folder in project_subdir_candidates(project_dir, "translation"):
+        if folder.exists():
+            candidates.extend(
+                p for p in folder.rglob("*")
+                if p.is_file() and is_translated_subtitle_candidate(p)
+            )
+    if not candidates:
+        candidates.extend(
+            p for p in Path(project_dir).rglob("*")
+            if p.is_file()
+            and is_translated_subtitle_candidate(p)
+            and not any(part in {"30_烧录", "30_burned", "40_切片", "40_clips"} for part in p.parts)
+        )
+    return newest_file(candidates)
+
+
+def resolve_burn_project_dir(session_id=""):
+    if session_id:
+        session = get_local_session(session_id)
+        if session and session.get("project_dir"):
+            project_dir = Path(session["project_dir"])
+            if (
+                project_dir.exists()
+                and find_project_source_video(project_dir)
+                and find_project_translated_subtitle(project_dir)
+            ):
+                return project_dir
+
+    best = None
+    best_time = -1
+    for project_dir in PROJECTS_DIR.iterdir() if PROJECTS_DIR.exists() else []:
+        if not project_dir.is_dir():
+            continue
+        video = find_project_source_video(project_dir)
+        subtitle = find_project_translated_subtitle(project_dir)
+        if not video or not subtitle:
+            continue
+        mtime = max(video.stat().st_mtime, subtitle.stat().st_mtime)
+        if mtime > best_time:
+            best = project_dir
+            best_time = mtime
+    return best
+
+
+def subtitle_entries_to_burn_segments(entries, sub_mode="zh_en"):
+    merged = []
+    for entry in entries:
+        text_parts = []
+        if (entry.get("source") or "").strip():
+            text_parts.extend([line.strip() for line in str(entry.get("source", "")).splitlines() if line.strip()])
+        if (entry.get("translation") or "").strip():
+            text_parts.extend([line.strip() for line in str(entry.get("translation", "")).splitlines() if line.strip()])
+        if not text_parts:
+            continue
+
+        zh_lines = [line for line in text_parts if contains_cjk(line)]
+        other_lines = [line for line in text_parts if not contains_cjk(line)]
+        if zh_lines:
+            zh = " ".join(zh_lines).strip()
+            en = " ".join(other_lines).strip()
+        else:
+            zh = ""
+            en = " ".join(other_lines or text_parts).strip()
+        if sub_mode == "zh":
+            en = ""
+            if not zh:
+                zh = " ".join(text_parts).strip()
+        merged.append([entry["start"], entry["end"], zh, en])
+    return merged
+
+
+def burn_ass_to_output_video(video_path, ass_path, output_path, update=None):
+    tmp_dir = Path(tempfile.gettempdir()) / f"youtube_burn_{uuid.uuid4().hex[:8]}"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    tmp_ass = tmp_dir / "_translated_burn.ass"
+    shutil.copy2(str(ass_path), str(tmp_ass))
+    try:
+        if update:
+            update(progress=70, message="正在烧录字幕到视频...")
+        result = subprocess.run(
+            [
+                "ffmpeg", "-y",
+                "-i", str(video_path),
+                "-vf", "ass=_translated_burn.ass",
+                "-c:a", "copy",
+                "-c:v", "libx264",
+                "-preset", "fast",
+                "-crf", "18",
+                "-movflags", "+faststart",
+                str(output_path),
+            ],
+            capture_output=True,
+            cwd=str(tmp_dir),
+            timeout=7200,
+        )
+        if result.returncode != 0 or not output_path.exists() or output_path.stat().st_size <= 0:
+            output_path.unlink(missing_ok=True)
+            err = result.stderr.decode("utf-8", errors="replace")[-600:] if result.stderr else "ffmpeg 未返回错误信息"
+            raise RuntimeError(f"烧录失败：{err}")
+        return output_path
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def run_burn_translated_video_task(task_id, opts):
+    try:
+        local_task_update(task_id, status="running", progress=5, message="正在查找当前视频和翻译字幕...")
+        project_dir = resolve_burn_project_dir(opts.get("session_id", ""))
+        if not project_dir:
+            raise RuntimeError("没有找到同时包含视频和翻译字幕的项目，请先下载视频并导出/翻译字幕。")
+        video = find_project_source_video(project_dir)
+        subtitle = find_project_translated_subtitle(project_dir)
+        if not video:
+            raise RuntimeError("当前项目没有找到可烧录的源视频。")
+        if not subtitle:
+            raise RuntimeError("当前项目没有找到翻译好的字幕，请先导出中文或双语 SRT。")
+
+        local_task_update(
+            task_id,
+            progress=20,
+            message=f"正在生成字幕样式：{subtitle.name}",
+            project_dir=str(project_dir),
+        )
+        srt_text = subtitle.read_text(encoding="utf-8", errors="replace")
+        entries = parse_srt_content(srt_text)
+        if not entries:
+            raise RuntimeError("翻译字幕无法解析，请确认是 SRT/VTT 字幕文件。")
+        merged = subtitle_entries_to_burn_segments(entries, opts.get("sub_mode", "zh_en"))
+        if not merged:
+            raise RuntimeError("翻译字幕没有可烧录的文本内容。")
+
+        play_res_x, play_res_y = probe_video_dimensions(video)
+        ass_opts = dict(opts)
+        ass_opts["play_res_x"] = play_res_x
+        ass_opts["play_res_y"] = play_res_y
+        ass_content = generate_dual_ass(merged, ass_opts)
+        burned_dir = project_subdir(project_dir, "burned")
+        stem = sanitize_filename(video.stem) or "video"
+        ass_path = burned_dir / f"{stem}.翻译字幕.ass"
+        ass_path.write_text(ass_content, encoding="utf-8")
+        output_path = burned_dir / f"{stem}.翻译字幕.mp4"
+        if output_path.exists():
+            output_path = burned_dir / f"{stem}.翻译字幕.{int(time.time())}.mp4"
+
+        burn_ass_to_output_video(
+            video,
+            ass_path,
+            output_path,
+            update=lambda **fields: local_task_update(task_id, **fields),
+        )
+        payload = file_download_payload(output_path)
+        local_task_update(
+            task_id,
+            status="completed",
+            progress=100,
+            message=f"烧录完成：{output_path.name}",
+            file=payload.get("file"),
+            url=payload.get("url"),
+            download_label="下载翻译视频",
+            video=str(video),
+            subtitle=str(subtitle),
+            output=str(output_path),
+            project_dir=str(project_dir),
+        )
+    except Exception as e:
+        local_task_update(task_id, status="error", message=str(e), error=str(e))
 
 
 def serialize_local_entries(entries, limit=120):
@@ -1450,6 +1730,79 @@ def split_long_subtitle_entries(entries, max_chars_latin=84, max_chars_cjk=42):
 
 def is_video_file(path):
     return Path(path).suffix.lower() in (".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi")
+
+
+def parse_local_filesystem_path(raw_path):
+    raw = (raw_path or "").strip().strip('"').strip("'")
+    if raw.lower().startswith("file://"):
+        parsed = urllib.parse.urlparse(raw)
+        path_text = urllib.parse.unquote(parsed.path or "")
+        if parsed.netloc:
+            path_text = f"//{parsed.netloc}{path_text}"
+        if re.match(r"^/[A-Za-z]:", path_text):
+            path_text = path_text[1:]
+        raw = path_text.replace("/", "\\")
+    return Path(raw).expanduser()
+
+
+def find_primary_video_in_directory(directory):
+    directory = Path(directory)
+    candidates = [
+        path for path in directory.rglob("*")
+        if path.is_file() and is_video_file(path)
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda p: p.stat().st_mtime)
+
+
+def pick_windows_local_path(kind="file"):
+    if os.name != "nt":
+        raise RuntimeError("本地路径选择器目前只支持 Windows。")
+    if kind == "directory":
+        script = r"""
+Add-Type -AssemblyName System.Windows.Forms
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+$dialog.Description = '选择包含视频的目录'
+$dialog.ShowNewFolderButton = $false
+$result = $dialog.ShowDialog()
+if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
+  [Console]::WriteLine($dialog.SelectedPath)
+}
+"""
+    else:
+        script = r"""
+Add-Type -AssemblyName System.Windows.Forms
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$dialog = New-Object System.Windows.Forms.OpenFileDialog
+$dialog.Title = '选择本地视频文件'
+$dialog.Filter = 'Video files (*.mp4;*.mov;*.mkv;*.webm;*.m4v;*.avi)|*.mp4;*.mov;*.mkv;*.webm;*.m4v;*.avi|All files (*.*)|*.*'
+$dialog.Multiselect = $false
+$result = $dialog.ShowDialog()
+if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
+  [Console]::WriteLine($dialog.FileName)
+}
+"""
+    result = subprocess.run(
+        [
+            "powershell",
+            "-NoProfile",
+            "-STA",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=300,
+    )
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or "路径选择窗口打开失败").strip())
+    return result.stdout.strip()
 
 
 def resolve_session_video_path(session):
@@ -2222,7 +2575,8 @@ def run_local_subtitle_task(task_id, media_path, original_name, opts):
             (translation_dir / "raw_en.srt").write_text(srt_text, encoding="utf-8")
         if project_dir:
             _, subdirs = ensure_project_dirs(project_dir.name)
-            (subdirs["subtitles"] / f"{sanitize_filename(Path(original_name).stem)}.raw_en.srt").write_text(
+            media_stem = local_media_output_stem(original_name, "local_video")
+            (subdirs["subtitles"] / f"{media_stem}.raw_en.srt").write_text(
                 srt_text,
                 encoding="utf-8",
             )
@@ -2231,7 +2585,7 @@ def run_local_subtitle_task(task_id, media_path, original_name, opts):
         entries, merged_count = merge_local_short_entries(entries)
         entries, split_count, _ = split_long_subtitle_entries(entries)
         if translation_dir:
-            stem = sanitize_filename(Path(original_name).stem or "local_video")
+            stem = local_media_output_stem(original_name, "local_video")
             prepared_name = "split_en.srt" if split_count else "merged_en.srt"
             (translation_dir / prepared_name).write_text(
                 entries_to_srt([{**e, "translation": ""} for e in entries], bilingual=False),
@@ -2263,7 +2617,7 @@ def run_local_subtitle_task(task_id, media_path, original_name, opts):
         bilingual = opts.get("output_mode", "bilingual") == "bilingual"
         order = opts.get("order", "en_top")
         output_text = entries_to_srt(entries, bilingual=bilingual, order=order)
-        stem = sanitize_filename(Path(original_name).stem or "local_video")
+        stem = local_media_output_stem(original_name, "local_video")
         suffix = "bilingual" if bilingual else "zh"
         if bilingual:
             suffix += ".zh-top" if order == "zh_top" else ".en-top"
@@ -2321,7 +2675,8 @@ def run_local_import_task(task_id, media_path, original_name, opts):
             (translation_dir / "raw_en.srt").write_text(srt_text, encoding="utf-8")
         if project_dir:
             _, subdirs = ensure_project_dirs(project_dir.name)
-            raw_sub_path = subdirs["subtitles"] / f"{sanitize_filename(Path(original_name).stem)}.raw_en.srt"
+            media_stem = local_media_output_stem(original_name, "local_video")
+            raw_sub_path = subdirs["subtitles"] / f"{media_stem}.raw_en.srt"
             raw_sub_path.write_text(srt_text, encoding="utf-8")
         session_id = create_local_session(
             original_name,
@@ -2372,7 +2727,7 @@ def run_local_translate_task(task_id, session_id, opts):
             if session_id in local_subtitle_sessions:
                 local_subtitle_sessions[session_id]["entries"] = entries
                 session = local_subtitle_sessions[session_id]
-        save_session_translation_artifacts(session, Path(session.get("name") or "subtitle").stem)
+        save_session_translation_artifacts(session, local_media_output_stem(session.get("name"), "subtitle"))
         local_task_update(
             task_id,
             status="completed",
@@ -2702,7 +3057,11 @@ def import_local_subtitle():
     original_name = re.split(r"[\\/]", upload.filename or "local_file")[-1]
     safe_name = sanitize_filename(original_name) or f"{uuid.uuid4().hex}.tmp"
     suffix = Path(safe_name).suffix.lower()
-    project_title = request.form.get("project_title", "").strip() or Path(original_name).stem or "local_audio"
+    project_title = normalize_local_project_title(
+        request.form.get("project_title", ""),
+        original_name,
+        "local_audio",
+    )
     project_dir, project_subdirs = ensure_project_dirs(project_title)
     write_project_notes(project_dir, project_subdirs, {"title": project_title}, "", "")
 
@@ -2775,15 +3134,38 @@ def get_local_subtitle_session(session_id):
     return jsonify(local_session_payload(session))
 
 
+@app.route("/api/local-path/pick", methods=["POST"])
+def pick_local_path():
+    data = request.json or {}
+    kind = (data.get("kind") or "file").strip().lower()
+    if kind not in {"file", "directory"}:
+        return jsonify({"error": "路径选择类型无效"}), 400
+    try:
+        selected = pick_windows_local_path(kind)
+        if not selected:
+            return jsonify({"error": "未选择路径"}), 400
+        return jsonify({"path": selected, "kind": kind})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/local-subtitle/clip-source", methods=["POST"])
 def upload_clip_source():
     data = request.json or {}
     raw_path = (data.get("video_path") or "").strip().strip('"')
     if not raw_path:
-        return jsonify({"error": "请填写本地视频路径"}), 400
-    video_path = Path(raw_path).expanduser()
-    if not video_path.exists() or not video_path.is_file():
-        return jsonify({"error": "视频路径不存在，请检查路径是否完整"}), 400
+        return jsonify({"error": "请填写或拖入本地视频/目录路径"}), 400
+    local_path = parse_local_filesystem_path(raw_path)
+    if not local_path.exists():
+        return jsonify({"error": "路径不存在，请检查视频文件或目录路径是否完整"}), 400
+    if local_path.is_dir():
+        video_path = find_primary_video_in_directory(local_path)
+        if not video_path:
+            return jsonify({"error": "这个目录里没有找到可切片的视频文件"}), 400
+    elif local_path.is_file():
+        video_path = local_path
+    else:
+        return jsonify({"error": "路径不是可读取的视频文件或目录"}), 400
     if not is_video_file(video_path):
         return jsonify({"error": "切片路径只支持视频文件"}), 400
 
@@ -2849,7 +3231,7 @@ def split_local_subtitle():
     if translation_dir:
         out_dir = Path(translation_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
-        stem = sanitize_filename(Path(session.get("name") or "subtitle").stem) or "subtitle"
+        stem = local_media_output_stem(session.get("name"), "subtitle")
         source_entries = [{**e, "translation": ""} for e in entries]
         (out_dir / f"{stem}.split_en.srt").write_text(
             entries_to_srt(source_entries, bilingual=False),
@@ -2895,7 +3277,7 @@ def apply_local_subtitle_corrections():
     applied = apply_asr_corrections(session["entries"], corrections)
     with local_subtitle_lock:
         local_subtitle_sessions[session["id"]]["entries"] = session["entries"]
-    save_session_translation_artifacts(session, Path(session.get("name") or "subtitle").stem)
+    save_session_translation_artifacts(session, local_media_output_stem(session.get("name"), "subtitle"))
     payload = local_session_payload(get_local_session(session["id"]))
     payload["applied"] = applied
     return jsonify(payload)
@@ -2957,7 +3339,7 @@ def export_local_subtitle():
     if not output_text.strip():
         return jsonify({"error": "没有可导出的字幕内容"}), 400
 
-    stem = sanitize_filename(Path(session.get("name") or "local_subtitle").stem)
+    stem = local_media_output_stem(session.get("name"), "local_subtitle")
     suffix = output_mode if output_mode in ("en", "zh") else "bilingual"
     if bilingual:
         suffix += ".zh-top" if order == "zh_top" else ".en-top"
@@ -2967,6 +3349,46 @@ def export_local_subtitle():
     output_path = output_dir / output_name
     output_path.write_text(output_text, encoding="utf-8")
     return jsonify(file_download_payload(output_path, prefer_zip=True))
+
+
+@app.route("/api/burn-translated-video", methods=["POST"])
+def burn_translated_video():
+    data = request.json or {}
+    task_id = str(uuid.uuid4())[:8]
+    opts = {
+        "session_id": data.get("session_id", ""),
+        "font": data.get("font", "Microsoft YaHei"),
+        "size": clamp_int(data.get("size", 52), 16, 200, 52),
+        "color": data.get("color", "#FFFFFF"),
+        "outline_color": data.get("outline_color", "#000000"),
+        "sub_mode": data.get("sub_mode", "zh_en"),
+        "sub_order": data.get("sub_order", "zh_top"),
+        "sub_pos": clamp_int(data.get("sub_pos", 2), 1, 9, 2),
+        "margin_v": clamp_int(data.get("margin_v", 30), 0, 1000, 30),
+        "bg_enabled": bool(data.get("bg_enabled", True)),
+        "bg_color": data.get("bg_color", "#000000"),
+        "bg_opacity": clamp_int(data.get("bg_opacity", 50), 0, 100, 50),
+        "bg_radius": clamp_int(data.get("bg_radius", 30), 0, 100, 30),
+        "bg_width": clamp_int(data.get("bg_width", 80), 0, 100, 80),
+        "bg_height": clamp_int(data.get("bg_height", 20), 0, 100, 20),
+        "bg_offset_x": clamp_int(data.get("bg_offset_x", 0), -100, 100, 0),
+        "bg_offset_y": clamp_int(data.get("bg_offset_y", 0), -100, 100, 0),
+    }
+    with local_subtitle_lock:
+        local_subtitle_tasks[task_id] = {
+            "id": task_id,
+            "status": "queued",
+            "progress": 0,
+            "message": "已加入烧录队列...",
+            "file": None,
+            "url": None,
+        }
+    threading.Thread(
+        target=run_burn_translated_video_task,
+        args=(task_id, opts),
+        daemon=True,
+    ).start()
+    return jsonify({"task_id": task_id})
 
 
 @app.route("/api/local-subtitle/clips", methods=["POST"])
@@ -3033,7 +3455,11 @@ def start_local_subtitle():
     original_name = re.split(r"[\\/]", upload.filename or "local_video.mp4")[-1]
     safe_name = sanitize_filename(original_name) or f"{uuid.uuid4().hex}.mp4"
     suffix = Path(safe_name).suffix.lower()
-    project_title = request.form.get("project_title", "").strip() or Path(original_name).stem or "local_video"
+    project_title = normalize_local_project_title(
+        request.form.get("project_title", ""),
+        original_name,
+        "local_video",
+    )
     project_dir, project_subdirs = ensure_project_dirs(project_title)
     write_project_notes(project_dir, project_subdirs, {"title": project_title}, "", "")
 
@@ -3172,7 +3598,7 @@ def start_download():
             "api_key": data.get("api_key", ""),
             "model": data.get("model", "gpt-4o-mini"),
         },
-        "burn_sub": data.get("burn_sub", False),
+        "burn_sub": False,
         "ae_compat": data.get("ae_compat", False),
     }
 
