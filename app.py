@@ -1,8 +1,10 @@
 """YouTube Downloader Web Application"""
 
+import csv
 import json
 import base64
 import os
+import random
 import re
 import shutil
 import subprocess
@@ -90,6 +92,11 @@ def local_media_output_stem(name="", fallback="subtitle"):
     raw = Path(str(name or "")).stem if name else ""
     raw = re.sub(r"(?i)\.local\.(bilingual(?:\.(en-top|zh-top))?|zh|en)$", "", raw)
     raw = re.sub(r"(?i)\.(raw_en|split_en|merged_en|corrected_en|compare_zh|zh)$", "", raw)
+    for _ in range(4):
+        cleaned = re.sub(r"\.(英文原版|有翻译参考资料版|无翻译参考资料版|中文字幕|双语|中文在上|英文在上|对比翻译)$", "", raw)
+        if cleaned == raw:
+            break
+        raw = cleaned
     stem = normalize_local_project_title(raw, "", fallback)
     return sanitize_filename(stem) or fallback
 
@@ -222,6 +229,134 @@ def build_bilibili_description(info, url, timeline=""):
         parts.append("\n时间轴：\n" + timeline)
     parts.append("\n说明：本文件由本地项目自动整理，可继续用于字幕翻译、双语字幕和切片。")
     return "\n".join(parts).strip() + "\n"
+
+
+def format_duration_zh(duration):
+    try:
+        total = max(0, int(float(duration or 0)))
+    except Exception:
+        total = 0
+    hours = total // 3600
+    minutes = (total % 3600) // 60
+    seconds = total % 60
+    if hours:
+        return f"{hours}小时{minutes}分{seconds}秒"
+    if minutes:
+        return f"{minutes}分{seconds}秒"
+    return f"{seconds}秒"
+
+
+def generate_ai_description_text(
+    info,
+    url,
+    api_url,
+    api_key,
+    model,
+    style="",
+    include_timeline=False,
+    timeline="",
+    bilibili=True,
+):
+    if not api_key:
+        raise ValueError("请先填写翻译/简介 API Key")
+    title = info.get("title", "")
+    desc = info.get("description", "")
+    tags = info.get("tags", []) or []
+    duration_str = format_duration_zh(info.get("duration", 0))
+    prompt = (
+        "你是一个专业的视频简介撰写和英译中编辑。\n"
+        "请把目标视频的英文信息整理成中文简介，保留 AI、技术、产品、人名、公司名等关键词的准确性。\n\n"
+    )
+    if style:
+        prompt += f"## 参考风格\n{style}\n\n"
+    prompt += (
+        f"## 目标视频信息\n"
+        f"- 原视频标题: {title}\n"
+        f"- 原视频链接: {url}\n"
+        f"- 时长: {duration_str}\n"
+        f"- 标签: {', '.join(tags[:12]) if tags else '无'}\n\n"
+        f"## 原始简介\n{desc or '无'}\n\n"
+    )
+    if include_timeline:
+        if timeline:
+            prompt += (
+                f"## 可用时间轴\n{timeline}\n\n"
+                "请把时间轴概括成适合 B站简介的中文时间轴，每行使用“00:00 中文标题”的形式。\n\n"
+            )
+        else:
+            prompt += "该视频暂时没有可用时间轴，如简介需要时间轴，请只给出合理的章节建议，不要编造具体不存在的时间点。\n\n"
+    if bilibili:
+        prompt += (
+            "请输出可以直接粘贴到 B站简介区的纯文本，格式要求：\n"
+            "1. 开头给出 1-2 句中文内容简介，不要写营销口号。\n"
+            "2. 用“看点：”列出 3-6 个简短要点。\n"
+            "3. 如果有时间轴，用“时间轴：”列出。\n"
+            "4. 末尾保留“原视频标题：”“原视频链接：”。\n"
+            "5. 不要使用 Markdown 标题符号，不要输出解释过程。\n"
+        )
+    else:
+        prompt += "请输出自然、准确的中文简介，不要输出解释过程。"
+
+    from openai import OpenAI
+    client_kwargs = {"api_key": api_key}
+    if api_url:
+        client_kwargs["base_url"] = api_url
+    client = OpenAI(**client_kwargs)
+    request_kwargs = {
+        "model": model or "gpt-4o-mini",
+        "messages": [{"role": "user", "content": prompt}],
+        "max_completion_tokens": 2000,
+    }
+    try:
+        response = client.chat.completions.create(**request_kwargs)
+    except Exception as exc:
+        if "max_completion_tokens" not in str(exc):
+            raise
+        request_kwargs["max_tokens"] = request_kwargs.pop("max_completion_tokens")
+        response = client.chat.completions.create(**request_kwargs)
+
+    generated = (response.choices[0].message.content or "").strip()
+    if bilibili:
+        source_lines = []
+        if title and "原视频标题" not in generated:
+            source_lines.append(f"原视频标题：{title}")
+        if url and "原视频链接" not in generated:
+            source_lines.append(f"原视频链接：{url}")
+        if source_lines:
+            generated = f"{generated}\n\n" + "\n".join(source_lines)
+    return generated.strip() + "\n"
+
+
+def save_ai_description_file(project_dir, subdirs, info, generated, bilibili=True):
+    filename = "translated_bilibili_description.txt" if bilibili else "translated_description.txt"
+    output_path = subdirs["description"] / filename
+    title = info.get("title") or project_dir.name
+    output_path.write_text(
+        f"{generated.strip()}\n\n保存时间：{time.strftime('%Y-%m-%d %H:%M:%S')}\n项目标题：{title}\n",
+        encoding="utf-8",
+    )
+    return output_path
+
+
+def generate_and_save_ai_description(project_dir, subdirs, info, url, options, timeline=""):
+    generated = generate_ai_description_text(
+        info,
+        url,
+        options.get("api_url", ""),
+        options.get("api_key", ""),
+        options.get("model", "gpt-4o-mini"),
+        style=options.get("style", ""),
+        include_timeline=bool(options.get("include_timeline", True)),
+        timeline=timeline,
+        bilibili=bool(options.get("bilibili", True)),
+    )
+    return save_ai_description_file(
+        project_dir,
+        subdirs,
+        info,
+        generated,
+        bilibili=bool(options.get("bilibili", True)),
+    ), generated
 
 
 def write_project_notes(
@@ -442,6 +577,33 @@ def ensure_audio_from_video(project_dir, subdirs, audio_format="mp3", update=Non
     return audio_path
 
 
+def translation_reference_used(context):
+    context = context or {}
+    return bool(
+        str(context.get("translation_reference") or "").strip()
+        or str(context.get("reference_materials") or "").strip()
+    )
+
+
+def translation_version_label(context):
+    return "有翻译参考资料版" if translation_reference_used(context) else "无翻译参考资料版"
+
+
+def subtitle_output_filename(stem, output_mode, order="zh_top", context=None, compare=False):
+    stem = local_media_output_stem(stem, "subtitle")
+    if output_mode == "en":
+        return f"{stem}.英文原版.srt"
+
+    version = translation_version_label(context)
+    if compare:
+        return f"{stem}.{version}.对比翻译.中文字幕.srt"
+    if output_mode == "zh":
+        return f"{stem}.{version}.中文字幕.srt"
+
+    order_label = "中文在上" if order == "zh_top" else "英文在上"
+    return f"{stem}.{version}.双语.{order_label}.srt"
+
+
 def save_session_translation_artifacts(session, stem="subtitle"):
     project_dir = session.get("project_dir")
     translation_dir = session.get("translation_dir")
@@ -455,16 +617,16 @@ def save_session_translation_artifacts(session, stem="subtitle"):
     source_entries = [{**e, "translation": ""} for e in entries]
     raw_en = entries_to_srt(source_entries, bilingual=False, order="en_top")
     if raw_en.strip():
-        path = translation_dir / f"{stem}.corrected_en.srt"
+        path = translation_dir / subtitle_output_filename(stem, "en", context=session)
         path.write_text(raw_en, encoding="utf-8")
-        outputs["corrected_en"] = path
+        outputs["english_original"] = path
     if any((e.get("translation") or "").strip() for e in entries):
         zh = entries_to_srt([{**e, "source": e.get("translation", ""), "translation": ""} for e in entries], bilingual=False)
-        zh_path = translation_dir / f"{stem}.zh.srt"
+        zh_path = translation_dir / subtitle_output_filename(stem, "zh", context=session)
         zh_path.write_text(zh, encoding="utf-8")
         outputs["zh"] = zh_path
         for order in ("en_top", "zh_top"):
-            bi_path = translation_dir / f"{stem}.bilingual.{order}.srt"
+            bi_path = translation_dir / subtitle_output_filename(stem, "bilingual", order=order, context=session)
             bi_path.write_text(entries_to_srt(entries, bilingual=True, order=order), encoding="utf-8")
             outputs[f"bilingual_{order}"] = bi_path
     if any((e.get("translation_compare") or "").strip() for e in entries):
@@ -472,7 +634,7 @@ def save_session_translation_artifacts(session, stem="subtitle"):
             {**e, "source": e.get("translation_compare", ""), "translation": ""}
             for e in entries
         ]
-        compare_path = translation_dir / f"{stem}.compare_zh.srt"
+        compare_path = translation_dir / subtitle_output_filename(stem, "zh", context=session, compare=True)
         compare_path.write_text(entries_to_srt(compare_entries, bilingual=False), encoding="utf-8")
         outputs["compare_zh"] = compare_path
     if project_dir:
@@ -1281,7 +1443,7 @@ def parse_srt_content(content):
     return entries
 
 
-def entries_to_srt(entries, bilingual=True, order="en_top"):
+def entries_to_srt(entries, bilingual=True, order="zh_top"):
     blocks = []
     for i, entry in enumerate(entries, 1):
         source = (entry.get("source") or "").strip()
@@ -1548,6 +1710,8 @@ def create_local_session(original_name, entries, project_dir=None, translation_d
             "project_dir": str(project_dir) if project_dir else "",
             "translation_dir": str(translation_dir) if translation_dir else "",
             "source_path": str(source_path) if source_path else "",
+            "reference_materials": "",
+            "translation_reference": "",
             "created_at": time.time(),
         }
     return session_id
@@ -1574,8 +1738,53 @@ def local_session_payload(session, limit=120):
         "corrections": session.get("corrections", []),
         "project_dir": session.get("project_dir", ""),
         "translation_dir": session.get("translation_dir", ""),
+        "reference_materials": session.get("reference_materials", ""),
+        "translation_reference": session.get("translation_reference", ""),
         "entries": serialize_local_entries(entries, limit=limit),
     }
+
+
+def write_translation_reference_file(translation_dir, reference_text, materials="", title=""):
+    reference_text = (reference_text or "").strip()
+    if not translation_dir or not reference_text:
+        return None
+    output_dir = Path(translation_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / "translation_reference.md"
+    parts = ["# 翻译参考资料"]
+    if title:
+        parts.append(f"项目：{title}")
+    parts.append(f"更新时间：{time.strftime('%Y-%m-%d %H:%M:%S')}")
+    parts.append("")
+    parts.append(reference_text)
+    if (materials or "").strip():
+        parts.append("")
+        parts.append("## 用户提供资料")
+        parts.append((materials or "").strip())
+    output_path.write_text("\n".join(parts).strip() + "\n", encoding="utf-8")
+    return output_path
+
+
+def set_session_translation_reference(session_id, reference_text="", materials=""):
+    reference_text = (reference_text or "").strip()
+    materials = (materials or "").strip()
+    if not session_id:
+        return None
+    with local_subtitle_lock:
+        session = local_subtitle_sessions.get(session_id)
+        if not session:
+            return None
+        session["reference_materials"] = materials
+        session["translation_reference"] = reference_text
+        session_copy = dict(session)
+    if not reference_text:
+        return None
+    return write_translation_reference_file(
+        session_copy.get("translation_dir", ""),
+        reference_text,
+        materials,
+        session_copy.get("name", ""),
+    )
 
 
 def text_is_cjk(text):
@@ -1971,6 +2180,23 @@ def extract_json_array(text):
     return []
 
 
+def extract_json_object(text):
+    cleaned = strip_code_fence(text)
+    try:
+        data = json.loads(cleaned)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start >= 0 and end > start:
+            try:
+                data = json.loads(cleaned[start:end + 1])
+                return data if isinstance(data, dict) else {}
+            except Exception:
+                return {}
+    return {}
+
+
 def normalize_api_key(api_key):
     key = (api_key or "").strip()
     return re.sub(r"^Bearer\s+", "", key, flags=re.IGNORECASE).strip()
@@ -2001,6 +2227,50 @@ def call_chat_model(api_url, api_key, model, messages):
             ) from exc
         raise RuntimeError(f"调用翻译/AI 检查模型失败：{text}") from exc
     return (response.choices[0].message.content or "").strip()
+
+
+def subtitle_text_sample(entries, limit=240, max_chars=18000):
+    lines = []
+    for entry in entries[:limit]:
+        text = (entry.get("source") or "").replace("\n", " ").strip()
+        if text:
+            lines.append(f"{entry.get('index', len(lines) + 1)} | {text}")
+    return "\n".join(lines)[:max_chars]
+
+
+def build_translation_reference(entries, api_url, api_key, model, materials="", user_hint=""):
+    sample = subtitle_text_sample(entries)
+    material_text = (materials or "").strip()[:20000]
+    hint = (user_hint or "").strip()
+    prompt = f"""你是字幕翻译前的资料整理助手。请根据用户提供的资料、背景提示和字幕样本，整理一份给后续字幕校正与翻译使用的“翻译参考表”。
+
+如果当前模型/API 支持联网搜索，可以围绕资料里的链接、关键词、人物、公司、产品名和主题补充公开信息；如果不支持联网，不要假装搜索，只基于用户资料和字幕样本整理，并把需要人工补充的内容写到“待确认”里。
+
+输出要求：
+- 使用简体中文。
+- 不要翻译整段字幕，只整理参考。
+- 优先覆盖 AI、技术、投资、公司、人名、产品名、缩写词、专有名词。
+- 给出中英文术语对照、统一译法、ASR 易错词和翻译风格规则。
+- 内容要紧凑，适合每次翻译字幕时放进提示词。
+
+背景提示：
+{hint or "无"}
+
+用户资料/搜索材料：
+{material_text or "无"}
+
+字幕样本：
+{sample or "无"}
+
+请按下面结构输出：
+## 内容背景
+## 术语与统一译法
+## 人名/公司/产品
+## ASR 易错词校正
+## 翻译风格规则
+## 待确认
+"""
+    return call_chat_model(api_url, api_key, model, [{"role": "user", "content": prompt}]).strip()
 
 
 def analyze_asr_corrections(entries, api_url, api_key, model, user_hint=""):
@@ -2597,6 +2867,13 @@ def run_local_subtitle_task(task_id, media_path, original_name, opts):
         model = opts.get("model", "").strip()
         if not api_url or not api_key or not model:
             raise RuntimeError("请填写 API 地址、API Key 和模型名后再翻译。")
+        if opts.get("translation_reference") and translation_dir:
+            write_translation_reference_file(
+                translation_dir,
+                opts.get("translation_reference", ""),
+                opts.get("reference_materials", ""),
+                original_name,
+            )
 
         local_task_update(task_id, progress=58, message="正在用大模型分析识别错误...")
         corrections = analyze_asr_corrections(
@@ -2614,14 +2891,25 @@ def run_local_subtitle_task(task_id, media_path, original_name, opts):
             translate_compare_entries(task_id, entries, cmp_api_url, cmp_api_key, cmp_model, opts.get("prompt", ""))
 
         local_task_update(task_id, progress=94, message="正在导出字幕文件...")
-        bilingual = opts.get("output_mode", "bilingual") == "bilingual"
-        order = opts.get("order", "en_top")
-        output_text = entries_to_srt(entries, bilingual=bilingual, order=order)
+        output_mode = opts.get("output_mode", "bilingual")
+        bilingual = output_mode == "bilingual"
+        order = opts.get("order", "zh_top")
+        if output_mode == "en":
+            output_text = entries_to_srt(
+                [{**e, "translation": ""} for e in entries],
+                bilingual=False,
+                order=order,
+            )
+        elif output_mode == "zh":
+            output_text = entries_to_srt(
+                [{**e, "source": e.get("translation", ""), "translation": ""} for e in entries],
+                bilingual=False,
+                order=order,
+            )
+        else:
+            output_text = entries_to_srt(entries, bilingual=bilingual, order=order)
         stem = local_media_output_stem(original_name, "local_video")
-        suffix = "bilingual" if bilingual else "zh"
-        if bilingual:
-            suffix += ".zh-top" if order == "zh_top" else ".en-top"
-        output_name = f"{stem}.local.{suffix}.srt"
+        output_name = subtitle_output_filename(stem, output_mode, order=order, context=opts)
         output_dir = translation_dir or DOWNLOADS_DIR
         output_path = output_dir / output_name
         output_path.write_text(output_text, encoding="utf-8")
@@ -2631,6 +2919,8 @@ def run_local_subtitle_task(task_id, media_path, original_name, opts):
             "project_dir": str(project_dir) if project_dir else "",
             "translation_dir": str(translation_dir) if translation_dir else "",
             "source_path": opts.get("source_path") or media_path,
+            "reference_materials": opts.get("reference_materials", ""),
+            "translation_reference": opts.get("translation_reference", ""),
         }
         save_session_translation_artifacts(session, stem)
         session_id = create_local_session(
@@ -2639,6 +2929,11 @@ def run_local_subtitle_task(task_id, media_path, original_name, opts):
             project_dir=project_dir,
             translation_dir=translation_dir,
             source_path=opts.get("source_path") or media_path,
+        )
+        set_session_translation_reference(
+            session_id,
+            opts.get("translation_reference", ""),
+            opts.get("reference_materials", ""),
         )
 
         local_task_update(
@@ -2715,6 +3010,11 @@ def run_local_translate_task(task_id, session_id, opts):
         if not api_url or not api_key or not model:
             raise RuntimeError("请填写 API 地址、API Key 和模型名后再翻译。")
         local_task_update(task_id, status="running", progress=3, message="正在准备翻译...")
+        set_session_translation_reference(
+            session_id,
+            opts.get("translation_reference", ""),
+            opts.get("reference_materials", ""),
+        )
         translate_local_entries(task_id, entries, api_url, api_key, model, opts.get("prompt", ""))
         if opts.get("compare_enabled"):
             cmp_api_url = opts.get("compare_api_url", "").strip()
@@ -2741,6 +3041,714 @@ def run_local_translate_task(task_id, session_id, opts):
 
 
 # ── Download Logic ────────────────────────────────────────────────────
+
+
+REVIEW_ERROR_TYPES = [
+    "新增信息",
+    "漏译",
+    "主语错误",
+    "宾语错误",
+    "逻辑错误",
+    "否定错误",
+    "程度错误",
+    "术语错误",
+    "中文不自然",
+]
+REVIEW_HARD_ERROR_TYPES = set(REVIEW_ERROR_TYPES) - {"中文不自然"}
+REVIEW_CSV_FIELDS = [
+    "编号", "时间轴", "英文原文", "A版中文", "B版中文", "最终采用", "最终中文",
+    "A评分", "B评分", "A准确性", "A上下文一致性", "A中文自然度", "A字幕适配度", "A风险控制",
+    "B准确性", "B上下文一致性", "B中文自然度", "B字幕适配度", "B风险控制",
+    "风险等级", "错误类型", "原因",
+]
+REVIEW_SCORE_KEYS = [
+    "accuracy",
+    "context_consistency",
+    "fluency",
+    "subtitle_fit",
+    "risk_control",
+]
+REVIEW_SCORE_MAX = {
+    "accuracy": 40,
+    "context_consistency": 20,
+    "fluency": 20,
+    "subtitle_fit": 10,
+    "risk_control": 10,
+}
+REVIEW_PARSE_ERROR = "MODEL_JSON_PARSE_FAILED"
+
+
+def review_summary_template():
+    return {
+        "total": 0,
+        "unchanged": 0,
+        "changed": 0,
+        "use_a": 0,
+        "use_b": 0,
+        "use_z": 0,
+        "tie": 0,
+        "high_risk": 0,
+        "model_parse_failed": 0,
+        "a_better": 0,
+        "b_better": 0,
+        "z_generated": 0,
+        "b_new_error_count": 0,
+        "a_new_error_count": 0,
+        "average_score_a": 0,
+        "average_score_b": 0,
+        "average_score_final": 0,
+        "error_type_counts": {key: 0 for key in REVIEW_ERROR_TYPES},
+    }
+
+
+def split_bilingual_review_lines(lines):
+    lines = [line.strip() for line in lines if line.strip()]
+    if not lines:
+        return "", ""
+    if len(lines) == 1:
+        return lines[0], ""
+
+    cjk_positions = [i for i, line in enumerate(lines) if text_is_cjk(line)]
+    if cjk_positions:
+        first_cjk = cjk_positions[0]
+        last_cjk = cjk_positions[-1]
+        if first_cjk > 0:
+            english = " ".join(lines[:first_cjk]).strip()
+            chinese = "\n".join(lines[first_cjk:]).strip()
+            return chinese, english
+        if last_cjk < len(lines) - 1:
+            chinese = "\n".join(lines[:last_cjk + 1]).strip()
+            english = " ".join(lines[last_cjk + 1:]).strip()
+            return chinese, english
+
+    return "\n".join(lines[:-1]).strip(), lines[-1].strip()
+
+
+def parse_bilingual_review_srt(content):
+    entries = []
+    content = (content or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if content.startswith("WEBVTT"):
+        content = re.sub(r"^WEBVTT[^\n]*(?:\n+)", "", content, count=1).strip()
+    if not content:
+        return entries
+
+    blocks = re.split(r"\n\s*\n", content)
+    for block in blocks:
+        lines = [line.strip() for line in block.splitlines() if line.strip()]
+        if not lines:
+            continue
+        time_idx = next((i for i, line in enumerate(lines) if "-->" in line), None)
+        if time_idx is None or time_idx >= len(lines) - 1:
+            continue
+
+        raw_index = None
+        for line in lines[:time_idx]:
+            if re.fullmatch(r"\d+", line):
+                raw_index = int(line)
+                break
+        cn, en = split_bilingual_review_lines(lines[time_idx + 1:])
+        entries.append({
+            "index": raw_index or len(entries) + 1,
+            "time": re.sub(r"\s+", " ", lines[time_idx]).strip(),
+            "cn": cn,
+            "en": en,
+        })
+    return entries
+
+
+def normalize_review_english(text):
+    return re.sub(r"[^a-z0-9]+", "", (text or "").lower())
+
+
+def normalize_review_space(text):
+    return re.sub(r"\s+", " ", (text or "").strip())
+
+
+def review_risk_max(*levels):
+    order = {"low": 0, "medium": 1, "high": 2}
+    return max((level for level in levels if level in order), key=lambda x: order[x], default="low")
+
+
+def align_review_entries(a_entries, b_entries):
+    rows = []
+    total = max(len(a_entries), len(b_entries))
+    for pos in range(total):
+        a = a_entries[pos] if pos < len(a_entries) else None
+        b = b_entries[pos] if pos < len(b_entries) else None
+        issues = []
+        risk = "low"
+
+        if not a or not b:
+            issues.append("A/B 字幕条数不一致，当前行缺少一个版本。")
+            risk = "high"
+
+        index = (a or b or {}).get("index", pos + 1)
+        if a and b and a.get("index") != b.get("index"):
+            issues.append(f"编号不一致：A={a.get('index')}，B={b.get('index')}。")
+            risk = "high"
+
+        time_line = (a or b or {}).get("time", "")
+        if a and b and a.get("time") != b.get("time"):
+            issues.append(f"时间轴不一致：A={a.get('time')}，B={b.get('time')}。")
+            risk = "high"
+
+        en_a = (a or {}).get("en", "")
+        en_b = (b or {}).get("en", "")
+        english = en_a or en_b
+        if a and b:
+            if en_a == en_b:
+                pass
+            elif normalize_review_english(en_a) == normalize_review_english(en_b):
+                issues.append("英文原文仅存在大小写、空格或标点差异。")
+                risk = review_risk_max(risk, "medium")
+            else:
+                issues.append("英文原文明显不同，需要人工复核。")
+                risk = "high"
+
+        rows.append({
+            "index": index,
+            "time": time_line,
+            "cn_a": (a or {}).get("cn", ""),
+            "cn_b": (b or {}).get("cn", ""),
+            "en": english,
+            "en_a": en_a,
+            "en_b": en_b,
+            "risk": risk,
+            "issues": issues,
+            "missing": not a or not b,
+        })
+    return rows
+
+
+def review_score_value(value, default=0, maximum=100):
+    try:
+        return max(0, min(maximum, int(round(float(value)))))
+    except Exception:
+        return default
+
+
+def normalize_review_score_detail(detail):
+    detail = detail if isinstance(detail, dict) else {}
+    return {key: review_score_value(detail.get(key), 0, REVIEW_SCORE_MAX[key]) for key in REVIEW_SCORE_KEYS}
+
+
+def normalize_review_score(score, detail):
+    if score is not None:
+        return review_score_value(score, 0, 100)
+    return sum(review_score_value(detail.get(key), 0, 100) for key in REVIEW_SCORE_KEYS)
+
+
+def normalize_review_errors(errors):
+    normalized = []
+    if not isinstance(errors, list):
+        return normalized
+    for item in errors:
+        if isinstance(item, dict):
+            err_type = str(item.get("type", "")).strip()
+            detail = str(item.get("detail", "")).strip()
+        else:
+            err_type = str(item).strip()
+            detail = ""
+        if not err_type and not detail:
+            continue
+        normalized.append({"type": err_type or "其他", "detail": detail})
+    return normalized
+
+
+def review_has_hard_errors(errors):
+    return any((err.get("type") or "").strip() in REVIEW_HARD_ERROR_TYPES for err in errors or [])
+
+
+def review_context_item(row, x_is_a):
+    return {
+        "index": row.get("index"),
+        "english": row.get("en", ""),
+        "version_x": row.get("cn_a", "") if x_is_a else row.get("cn_b", ""),
+        "version_y": row.get("cn_b", "") if x_is_a else row.get("cn_a", ""),
+    }
+
+
+def build_review_payload(rows, current_pos, before=2, after=2, x_is_a=True):
+    start = max(0, current_pos - before)
+    end = min(len(rows), current_pos + after + 1)
+    current = rows[current_pos]
+    payload = {
+        "context_before": [review_context_item(rows[i], x_is_a) for i in range(start, current_pos)],
+        "current": {
+            "index": current.get("index"),
+            "time": current.get("time", ""),
+            "english": current.get("en", ""),
+            "version_x": current.get("cn_a", "") if x_is_a else current.get("cn_b", ""),
+            "version_y": current.get("cn_b", "") if x_is_a else current.get("cn_a", ""),
+        },
+        "context_after": [review_context_item(rows[i], x_is_a) for i in range(current_pos + 1, end)],
+    }
+    if current.get("issues"):
+        payload["alignment_warnings"] = current.get("issues")
+    return payload
+
+
+def review_prompt_messages(payload, allow_z=True):
+    system_prompt = """你是专业字幕翻译审校员。你会看到英文原文、上下文，以及两个中文译文版本。
+
+你的任务不是重新翻译整段视频，而是判断当前字幕哪个译文更忠实、更适合作为中文字幕。
+
+请严格遵守：
+
+1. 英文原文是唯一事实依据。
+2. 不要猜测哪个版本来自参考资料。
+3. 不要因为某个版本更华丽就判更好。
+4. 优先检查硬错误：新增信息、漏译、主语错误、宾语错误、否定错误、因果错误、程度错误、术语错误。
+5. 只有在两个版本都没有硬错误时，才比较中文自然度和字幕可读性。
+6. 如果两个版本只是风格差异，请判定为 TIE。
+7. 如果两个版本都有问题，请生成一个 Z 版。
+8. Z 版必须严格忠实英文，不允许添加英文没有的信息。
+9. 输出必须是 JSON，不要输出解释性文字。
+
+评分标准：
+准确性 40 分：是否忠实英文原意，有无误译、漏译、增译。
+上下文一致性 20 分：术语、主语、上下文衔接是否一致。
+中文自然度 20 分：是否像自然中文字幕，是否拗口。
+字幕适配度 10 分：是否简洁，是否适合屏幕阅读。
+风险控制 10 分：是否避免幻觉、过度解释、擅自补充。
+
+请输出 JSON：
+
+{
+  "choice": "X | Y | Z | TIE",
+  "score_x": 0,
+  "score_y": 0,
+  "score_detail_x": {
+    "accuracy": 0,
+    "context_consistency": 0,
+    "fluency": 0,
+    "subtitle_fit": 0,
+    "risk_control": 0
+  },
+  "score_detail_y": {
+    "accuracy": 0,
+    "context_consistency": 0,
+    "fluency": 0,
+    "subtitle_fit": 0,
+    "risk_control": 0
+  },
+  "error_x": [
+    {
+      "type": "新增信息 | 漏译 | 主语错误 | 宾语错误 | 逻辑错误 | 否定错误 | 程度错误 | 术语错误 | 中文不自然",
+      "detail": "具体说明"
+    }
+  ],
+  "error_y": [],
+  "better_reason": "简短说明为什么选择该版本",
+  "final_cn": "最终采用的中文字幕。如果 choice 是 X，则填版本X文本；如果 choice 是 Y，则填版本Y文本；如果 choice 是 TIE，则填更适合作为最终字幕的文本；如果 choice 是 Z，则填新生成的严格忠实译文。",
+  "risk_level": "low | medium | high"
+}"""
+    user_note = "下面是本次只审校 current 条目的上下文 JSON。不要重翻全片，只对 current 做对比、评分和选择。"
+    if not allow_z:
+        user_note += "\n本次配置不允许生成 Z 版。如果两个版本都有问题，请选择较少硬错误的一版，并把风险标为 high。"
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_note + "\n\n" + json.dumps(payload, ensure_ascii=False, indent=2)},
+    ]
+
+
+def call_review_model(api_url, api_key, model, payload, allow_z=True):
+    text = call_chat_model(api_url, api_key, model, review_prompt_messages(payload, allow_z=allow_z))
+    data = extract_json_object(text)
+    if not data:
+        raise ValueError(REVIEW_PARSE_ERROR)
+    return data
+
+
+def normalize_review_choice(choice):
+    choice = str(choice or "").upper().strip()
+    if choice in {"X", "Y", "Z", "TIE"}:
+        return choice
+    for token in ("TIE", "X", "Y", "Z"):
+        if token in choice:
+            return token
+    return ""
+
+
+def build_review_result(row, x_is_a, model_data=None, tie_default="B", allow_z=True, parse_failed=False):
+    model_data = model_data or {}
+    detail_x = normalize_review_score_detail(model_data.get("score_detail_x"))
+    detail_y = normalize_review_score_detail(model_data.get("score_detail_y"))
+    score_x = normalize_review_score(model_data.get("score_x"), detail_x)
+    score_y = normalize_review_score(model_data.get("score_y"), detail_y)
+    errors_x = normalize_review_errors(model_data.get("error_x"))
+    errors_y = normalize_review_errors(model_data.get("error_y"))
+    choice = normalize_review_choice(model_data.get("choice"))
+    reason = str(model_data.get("better_reason", "")).strip()
+    risk_level = str(model_data.get("risk_level", "low")).lower().strip()
+    if risk_level not in {"low", "medium", "high"}:
+        risk_level = "low"
+    risk_level = review_risk_max(risk_level, row.get("risk", "low"))
+
+    if x_is_a:
+        score_a, score_b = score_x, score_y
+        detail_a, detail_b = detail_x, detail_y
+        errors_a, errors_b = errors_x, errors_y
+        x_version, y_version = "A", "B"
+        x_text, y_text = row.get("cn_a", ""), row.get("cn_b", "")
+    else:
+        score_a, score_b = score_y, score_x
+        detail_a, detail_b = detail_y, detail_x
+        errors_a, errors_b = errors_y, errors_x
+        x_version, y_version = "B", "A"
+        x_text, y_text = row.get("cn_b", ""), row.get("cn_a", "")
+
+    if parse_failed:
+        choice = "PARSE_FAILED"
+        final_choice = "B" if row.get("cn_b") else "A"
+        final_cn = row.get("cn_b") or row.get("cn_a") or ""
+        risk_level = "high"
+        reason = "模型 JSON 解析失败，已按安全规则默认采用 B 版。" if row.get("cn_b") else "模型 JSON 解析失败，B 版缺失，采用 A 版。"
+    elif choice == "X":
+        final_choice = x_version
+        final_cn = x_text
+    elif choice == "Y":
+        final_choice = y_version
+        final_cn = y_text
+    elif choice == "Z" and allow_z:
+        final_choice = "Z"
+        final_cn = str(model_data.get("final_cn", "")).strip() or row.get("cn_b") or row.get("cn_a", "")
+    elif choice == "TIE":
+        final_choice = "TIE_A" if tie_default == "A" else "TIE_B"
+        final_cn = row.get("cn_a", "") if tie_default == "A" else row.get("cn_b", "")
+        model_final = str(model_data.get("final_cn", "")).strip()
+        if model_final and model_final != final_cn:
+            reason = (reason + "；" if reason else "") + f"模型 TIE 文本：{model_final}"
+    else:
+        final_choice = "B" if row.get("cn_b") else "A"
+        final_cn = row.get("cn_b") or row.get("cn_a") or ""
+        risk_level = review_risk_max(risk_level, "medium")
+        reason = (reason + "；" if reason else "") + "模型选择无效或 Z 被关闭，默认采用 B 版。"
+
+    if final_choice in {"B", "TIE_B"} and review_has_hard_errors(errors_b) and not review_has_hard_errors(errors_a):
+        final_choice = "A"
+        final_cn = row.get("cn_a", "")
+        risk_level = review_risk_max(risk_level, "high")
+        reason = (reason + "；" if reason else "") + "B 版存在硬错误，按安全规则回退 A 版。"
+
+    return {
+        "choice": choice,
+        "final_choice": final_choice,
+        "final_cn": final_cn,
+        "score_a": score_a,
+        "score_b": score_b,
+        "detail_a": detail_a,
+        "detail_b": detail_b,
+        "errors_a": errors_a,
+        "errors_b": errors_b,
+        "risk_level": risk_level,
+        "reason": reason,
+        "model_parse_failed": parse_failed,
+    }
+
+
+def unchanged_review_result(row):
+    return {
+        "choice": "UNCHANGED",
+        "final_choice": "UNCHANGED",
+        "final_cn": row.get("cn_a") or row.get("cn_b") or "",
+        "score_a": "",
+        "score_b": "",
+        "detail_a": {key: "" for key in REVIEW_SCORE_KEYS},
+        "detail_b": {key: "" for key in REVIEW_SCORE_KEYS},
+        "errors_a": [],
+        "errors_b": [],
+        "risk_level": row.get("risk", "low"),
+        "reason": "A/B 中文完全一致，未调用模型。" + ("；" + "；".join(row.get("issues", [])) if row.get("issues") else ""),
+        "model_parse_failed": False,
+    }
+
+
+def missing_review_result(row, tie_default="B"):
+    final_choice = "B" if tie_default == "B" and row.get("cn_b") else "A"
+    if not row.get("cn_a"):
+        final_choice = "B"
+    if not row.get("cn_b"):
+        final_choice = "A"
+    return {
+        "choice": "MISSING",
+        "final_choice": final_choice,
+        "final_cn": row.get("cn_b") if final_choice == "B" else row.get("cn_a", ""),
+        "score_a": "",
+        "score_b": "",
+        "detail_a": {key: "" for key in REVIEW_SCORE_KEYS},
+        "detail_b": {key: "" for key in REVIEW_SCORE_KEYS},
+        "errors_a": [],
+        "errors_b": [],
+        "risk_level": "high",
+        "reason": "A/B 当前行缺少一个版本，未调用模型；" + "；".join(row.get("issues", [])),
+        "model_parse_failed": False,
+    }
+
+
+def review_error_types_text(result):
+    types = []
+    for err in result.get("errors_a", []) + result.get("errors_b", []):
+        err_type = (err.get("type") or "").strip()
+        if err_type and err_type not in types:
+            types.append(err_type)
+    if result.get("model_parse_failed"):
+        types.append("model_parse_failed")
+    return ";".join(types)
+
+
+def review_reason_text(row, result):
+    parts = []
+    if result.get("reason"):
+        parts.append(result["reason"])
+    for issue in row.get("issues", []):
+        if issue not in parts:
+            parts.append(issue)
+    details = []
+    for label, errors in (("A", result.get("errors_a", [])), ("B", result.get("errors_b", []))):
+        for err in errors:
+            detail = (err.get("detail") or "").strip()
+            err_type = (err.get("type") or "").strip()
+            if detail:
+                details.append(f"{label}:{err_type}:{detail}" if err_type else f"{label}:{detail}")
+    parts.extend(details[:6])
+    return "；".join(parts)
+
+
+def update_review_summary(summary, result, changed):
+    if changed:
+        summary["changed"] += 1
+    if result["final_choice"] == "UNCHANGED":
+        summary["unchanged"] += 1
+    if result["final_choice"] in {"A", "TIE_A"}:
+        summary["use_a"] += 1
+    elif result["final_choice"] in {"B", "TIE_B"}:
+        summary["use_b"] += 1
+    elif result["final_choice"] == "Z":
+        summary["use_z"] += 1
+        summary["z_generated"] += 1
+    if result.get("choice") == "TIE":
+        summary["tie"] += 1
+    if result.get("risk_level") == "high":
+        summary["high_risk"] += 1
+    if result.get("model_parse_failed"):
+        summary["model_parse_failed"] += 1
+    if result.get("choice") in {"X", "Y"}:
+        if result["final_choice"] == "A":
+            summary["a_better"] += 1
+        elif result["final_choice"] == "B":
+            summary["b_better"] += 1
+    summary["a_new_error_count"] += len(result.get("errors_a", []))
+    summary["b_new_error_count"] += len(result.get("errors_b", []))
+    for err in result.get("errors_a", []) + result.get("errors_b", []):
+        err_type = (err.get("type") or "").strip()
+        if err_type in summary["error_type_counts"]:
+            summary["error_type_counts"][err_type] += 1
+
+
+def write_cross_review_outputs(base_stem, rows, results, summary, output_detail=True):
+    output_dir = DOWNLOADS_DIR / "review_outputs" / project_safe_name(f"{base_stem}_{time.strftime('%Y%m%d_%H%M%S')}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    safe_stem = sanitize_filename(base_stem).strip().strip(".") or "subtitle"
+
+    srt_path = output_dir / f"{safe_stem}.交叉审校合并版.srt"
+    csv_path = output_dir / f"{safe_stem}.翻译评分报告.csv"
+    json_path = output_dir / f"{safe_stem}.翻译评分汇总.json"
+    zip_path = output_dir / f"{safe_stem}.交叉审校合并结果.zip"
+
+    blocks = []
+    for row, result in zip(rows, results):
+        final_cn = (result.get("final_cn") or row.get("cn_b") or row.get("cn_a") or "").strip()
+        english = (row.get("en") or row.get("en_a") or row.get("en_b") or "").strip()
+        text_lines = [final_cn] if final_cn else []
+        if english:
+            text_lines.append(english)
+        blocks.append(f"{row.get('index')}\n{row.get('time')}\n" + "\n".join(text_lines) + "\n")
+    srt_path.write_text("\n".join(blocks), encoding="utf-8")
+
+    if output_detail:
+        with csv_path.open("w", encoding="utf-8-sig", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=REVIEW_CSV_FIELDS)
+            writer.writeheader()
+            for row, result in zip(rows, results):
+                da = result.get("detail_a") or {}
+                db = result.get("detail_b") or {}
+                writer.writerow({
+                    "编号": row.get("index"),
+                    "时间轴": row.get("time", ""),
+                    "英文原文": row.get("en", ""),
+                    "A版中文": row.get("cn_a", ""),
+                    "B版中文": row.get("cn_b", ""),
+                    "最终采用": result.get("final_choice", ""),
+                    "最终中文": result.get("final_cn", ""),
+                    "A评分": result.get("score_a", ""),
+                    "B评分": result.get("score_b", ""),
+                    "A准确性": da.get("accuracy", ""),
+                    "A上下文一致性": da.get("context_consistency", ""),
+                    "A中文自然度": da.get("fluency", ""),
+                    "A字幕适配度": da.get("subtitle_fit", ""),
+                    "A风险控制": da.get("risk_control", ""),
+                    "B准确性": db.get("accuracy", ""),
+                    "B上下文一致性": db.get("context_consistency", ""),
+                    "B中文自然度": db.get("fluency", ""),
+                    "B字幕适配度": db.get("subtitle_fit", ""),
+                    "B风险控制": db.get("risk_control", ""),
+                    "风险等级": result.get("risk_level", "low"),
+                    "错误类型": review_error_types_text(result),
+                    "原因": review_reason_text(row, result),
+                })
+    else:
+        csv_path.write_text("", encoding="utf-8-sig")
+
+    json_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.write(srt_path, arcname=srt_path.name)
+        if output_detail:
+            zf.write(csv_path, arcname=csv_path.name)
+        zf.write(json_path, arcname=json_path.name)
+
+    return {
+        "srt": path_download_info(srt_path),
+        "csv": path_download_info(csv_path),
+        "summary": path_download_info(json_path),
+        "zip": path_download_info(zip_path),
+    }
+
+
+def run_cross_review_task(task_id, a_path, b_path, opts):
+    try:
+        local_task_update(task_id, status="running", progress=3, message="正在解析字幕...")
+        a_text = Path(a_path).read_text(encoding="utf-8-sig", errors="replace")
+        b_text = Path(b_path).read_text(encoding="utf-8-sig", errors="replace")
+        a_entries = parse_bilingual_review_srt(a_text)
+        b_entries = parse_bilingual_review_srt(b_text)
+        if not a_entries or not b_entries:
+            raise RuntimeError("没有解析到可用的双语 SRT，请确认每条包含中文译文和英文原文。")
+
+        local_task_update(task_id, progress=10, message="正在检查对齐...")
+        rows = align_review_entries(a_entries, b_entries)
+        before = clamp_int(opts.get("context_before", 2), 0, 10, 2)
+        after = clamp_int(opts.get("context_after", 2), 0, 10, 2)
+        allow_z = bool(opts.get("allow_z", True))
+        tie_default = "A" if str(opts.get("tie_default", "B")).upper() == "A" else "B"
+        only_changed = bool(opts.get("only_changed", True))
+        output_detail = bool(opts.get("output_detail", True))
+        api_url = opts.get("api_url", "").strip()
+        api_key = opts.get("api_key", "").strip()
+        model = opts.get("model", "").strip()
+        if not api_url or not api_key or not model:
+            raise RuntimeError("请填写翻译/审校大模型 API 地址、Key 和模型名。")
+
+        review_positions = [
+            i for i, row in enumerate(rows)
+            if not row.get("missing")
+            and row.get("cn_a", "").strip() != row.get("cn_b", "").strip()
+            and (
+                not only_changed
+                or normalize_review_space(row.get("cn_a")) != normalize_review_space(row.get("cn_b"))
+            )
+        ]
+        total_reviews = len(review_positions)
+        review_no = 0
+        summary = review_summary_template()
+        summary["total"] = len(rows)
+        results = []
+        score_a_values = []
+        score_b_values = []
+        score_final_values = []
+
+        for pos, row in enumerate(rows):
+            changed = normalize_review_space(row.get("cn_a")) != normalize_review_space(row.get("cn_b"))
+            exact_same = row.get("cn_a", "").strip() == row.get("cn_b", "").strip()
+            if row.get("missing"):
+                result = missing_review_result(row, tie_default=tie_default)
+            elif exact_same or (only_changed and not changed):
+                result = unchanged_review_result(row)
+            else:
+                review_no += 1
+                progress = 15 + round(review_no / max(1, total_reviews) * 70)
+                local_task_update(
+                    task_id,
+                    status="running",
+                    progress=progress,
+                    message=f"正在审校第 {review_no} / {total_reviews} 条...",
+                )
+                x_is_a = random.choice([True, False])
+                payload = build_review_payload(rows, pos, before=before, after=after, x_is_a=x_is_a)
+                model_data = None
+                parse_failed = False
+                last_error = ""
+                for _ in range(2):
+                    try:
+                        model_data = call_review_model(api_url, api_key, model, payload, allow_z=allow_z)
+                        break
+                    except ValueError as exc:
+                        if str(exc) != REVIEW_PARSE_ERROR:
+                            raise
+                        last_error = "模型没有返回可解析的 JSON。"
+                        model_data = None
+                    except Exception as exc:
+                        raise exc
+                if model_data is None:
+                    parse_failed = True
+                    model_data = {"better_reason": last_error}
+                result = build_review_result(
+                    row,
+                    x_is_a,
+                    model_data=model_data,
+                    tie_default=tie_default,
+                    allow_z=allow_z,
+                    parse_failed=parse_failed,
+                )
+
+            update_review_summary(summary, result, changed)
+            if isinstance(result.get("score_a"), int):
+                score_a_values.append(result["score_a"])
+            if isinstance(result.get("score_b"), int):
+                score_b_values.append(result["score_b"])
+            if result.get("final_choice") in {"A", "TIE_A"} and isinstance(result.get("score_a"), int):
+                score_final_values.append(result["score_a"])
+            elif result.get("final_choice") in {"B", "TIE_B"} and isinstance(result.get("score_b"), int):
+                score_final_values.append(result["score_b"])
+            elif result.get("final_choice") == "Z":
+                candidates = [v for v in (result.get("score_a"), result.get("score_b")) if isinstance(v, int)]
+                if candidates:
+                    score_final_values.append(max(candidates))
+            results.append(result)
+
+        def avg(values):
+            return round(sum(values) / len(values), 2) if values else 0
+
+        summary["average_score_a"] = avg(score_a_values)
+        summary["average_score_b"] = avg(score_b_values)
+        summary["average_score_final"] = avg(score_final_values)
+
+        local_task_update(task_id, progress=88, message="正在生成最终 SRT...")
+        base_stem = Path(opts.get("original_name") or Path(a_path).name).stem
+        files = write_cross_review_outputs(base_stem, rows, results, summary, output_detail=output_detail)
+        local_task_update(task_id, progress=96, message="正在生成评分报告...")
+        time.sleep(0.1)
+        local_task_update(
+            task_id,
+            status="completed",
+            progress=100,
+            message=f"完成：{len(rows)} 条字幕，审校 {total_reviews} 条，高风险 {summary['high_risk']} 条。",
+            file=files["zip"]["file"],
+            url=files["zip"]["url"],
+            download_label="下载交叉审校结果ZIP",
+            srt_file=files["srt"]["file"],
+            srt_url=files["srt"]["url"],
+            csv_file=files["csv"]["file"],
+            csv_url=files["csv"]["url"],
+            summary_file=files["summary"]["file"],
+            summary_url=files["summary"]["url"],
+            zip_file=files["zip"]["file"],
+            zip_url=files["zip"]["url"],
+            summary_data=summary,
+        )
+    except Exception as exc:
+        local_task_update(task_id, status="error", message=str(exc), error=str(exc))
 
 
 def fix_video_for_ae(downloads_dir, update=None):
@@ -2830,14 +3838,19 @@ def run_download(task_id, url, options):
         want_audio = True
     want_cover = bool(raw_items.get("cover", True))
     want_description = bool(raw_items.get("description", True))
+    want_translated_description = bool(raw_items.get("translated_description", False))
     want_link_title = bool(raw_items.get("link_title", True))
+    description_options = options.get("description_options") or {}
 
     info = fetch_video_info(url)
     project_title = info.get("title") or options.get("project_title") or "untitled_video"
     project_dir, project_subdirs = ensure_project_dirs(project_title)
+    need_timeline = want_description or (
+        want_translated_description and bool(description_options.get("include_timeline", True))
+    )
     timeline = extract_timeline_from_info(
         info,
-        get_subtitle_timeline(url) if want_description else "",
+        get_subtitle_timeline(url) if need_timeline else "",
     )
     write_project_notes(
         project_dir,
@@ -2995,6 +4008,20 @@ def run_download(task_id, url, options):
             move_project_outputs(project_dir, project_subdirs)
             if want_cover:
                 normalize_cover_images_to_jpeg(project_subdirs["source"], update)
+            if want_translated_description:
+                update("downloading", 98, "Generating translated Bilibili description...")
+                try:
+                    generate_and_save_ai_description(
+                        project_dir,
+                        project_subdirs,
+                        info,
+                        url,
+                        description_options,
+                        timeline=timeline,
+                    )
+                except Exception as desc_error:
+                    update("error", message=f"翻译后简介生成失败: {desc_error}")
+                    return
             update("completed", 100, f"Download complete: {project_dir.name}", list_downloaded_files())
         else:
             update("error", message=f"Download failed (exit code {process.returncode}): {'; '.join(last_lines[-5:])}")
@@ -3132,6 +4159,41 @@ def get_local_subtitle_session(session_id):
     if not session:
         return jsonify({"error": "字幕会话不存在"}), 404
     return jsonify(local_session_payload(session))
+
+
+@app.route("/api/local-subtitle/reference", methods=["POST"])
+def build_local_translation_reference():
+    data = request.json or {}
+    session = get_local_session(data.get("session_id", ""))
+    if not session:
+        return jsonify({"error": "字幕会话不存在，请先读取字幕"}), 404
+
+    api_url = data.get("api_url", "").strip()
+    api_key = data.get("api_key", "").strip()
+    model = data.get("model", "").strip()
+    if not api_url or not api_key or not model:
+        return jsonify({"error": "请先填写 AI 设置里的 API 地址、Key 和模型"}), 400
+
+    try:
+        reference = build_translation_reference(
+            session["entries"],
+            api_url,
+            api_key,
+            model,
+            materials=data.get("reference_materials", ""),
+            user_hint=data.get("prompt", ""),
+        )
+        output_path = set_session_translation_reference(
+            session["id"],
+            reference,
+            data.get("reference_materials", ""),
+        )
+        payload = local_session_payload(get_local_session(session["id"]))
+        if output_path:
+            payload["reference_file"] = str(output_path.relative_to(DOWNLOADS_DIR)).replace("\\", "/")
+        return jsonify(payload)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/local-path/pick", methods=["POST"])
@@ -3283,6 +4345,35 @@ def apply_local_subtitle_corrections():
     return jsonify(payload)
 
 
+@app.route("/api/local-subtitle/clear-translations", methods=["POST"])
+def clear_local_subtitle_translations():
+    data = request.json or {}
+    session_id = data.get("session_id", "")
+    if not get_local_session(session_id):
+        return jsonify({"error": "字幕会话不存在"}), 404
+
+    cleared = 0
+    cleared_compare = 0
+    with local_subtitle_lock:
+        session = local_subtitle_sessions.get(session_id)
+        if not session:
+            return jsonify({"error": "字幕会话不存在"}), 404
+        for entry in session.get("entries", []):
+            if (entry.get("translation") or "").strip():
+                cleared += 1
+            if (entry.get("translation_compare") or "").strip():
+                cleared_compare += 1
+            entry["translation"] = ""
+            entry["translation_compare"] = ""
+        session_snapshot = dict(session)
+
+    save_session_translation_artifacts(session_snapshot, local_media_output_stem(session_snapshot.get("name"), "subtitle"))
+    payload = local_session_payload(get_local_session(session_id))
+    payload["cleared_translations"] = cleared
+    payload["cleared_compare"] = cleared_compare
+    return jsonify(payload)
+
+
 @app.route("/api/local-subtitle/translate", methods=["POST"])
 def translate_local_subtitle_session():
     data = request.json or {}
@@ -3305,6 +4396,8 @@ def translate_local_subtitle_session():
         "api_key": data.get("api_key", ""),
         "model": data.get("model", ""),
         "prompt": data.get("prompt", ""),
+        "reference_materials": data.get("reference_materials", ""),
+        "translation_reference": data.get("translation_reference", ""),
         "compare_enabled": bool(data.get("compare_enabled", False)),
         "compare_api_url": data.get("compare_api_url", ""),
         "compare_api_key": data.get("compare_api_key", ""),
@@ -3326,7 +4419,7 @@ def export_local_subtitle():
         return jsonify({"error": "字幕会话不存在"}), 404
 
     output_mode = data.get("output_mode", "bilingual")
-    order = data.get("order", "en_top")
+    order = data.get("order", "zh_top")
     bilingual = output_mode == "bilingual"
     if output_mode == "en":
         export_entries = [{**e, "translation": ""} for e in session["entries"]]
@@ -3340,10 +4433,7 @@ def export_local_subtitle():
         return jsonify({"error": "没有可导出的字幕内容"}), 400
 
     stem = local_media_output_stem(session.get("name"), "local_subtitle")
-    suffix = output_mode if output_mode in ("en", "zh") else "bilingual"
-    if bilingual:
-        suffix += ".zh-top" if order == "zh_top" else ".en-top"
-    output_name = f"{stem}.local.{suffix}.srt"
+    output_name = subtitle_output_filename(stem, output_mode, order=order, context=session)
     output_dir = Path(session.get("translation_dir") or DOWNLOADS_DIR)
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / output_name
@@ -3484,6 +4574,8 @@ def start_local_subtitle():
         "api_key": api_key,
         "model": model,
         "prompt": request.form.get("prompt", ""),
+        "reference_materials": request.form.get("reference_materials", ""),
+        "translation_reference": request.form.get("translation_reference", ""),
         "compare_enabled": request.form.get("compare_enabled") == "1",
         "compare_api_url": request.form.get("compare_api_url", ""),
         "compare_api_key": request.form.get("compare_api_key", ""),
@@ -3495,7 +4587,7 @@ def start_local_subtitle():
         "volc_segment_minutes": request.form.get("volc_segment_minutes", "25"),
         "language": request.form.get("language", "en"),
         "output_mode": request.form.get("output_mode", "bilingual"),
-        "order": request.form.get("order", "en_top"),
+        "order": request.form.get("order", "zh_top"),
         "initial_prompt": request.form.get("initial_prompt", ""),
         "project_dir": str(project_dir),
         "translation_dir": str(project_subdirs["translation"]),
@@ -3525,6 +4617,66 @@ def start_local_subtitle():
     return jsonify({"task_id": task_id})
 
 
+@app.route("/api/srt-review/start", methods=["POST"])
+def start_srt_cross_review():
+    if "file_a" not in request.files or "file_b" not in request.files:
+        return jsonify({"error": "请选择 A 版和 B 版两个双语 SRT 文件。"}), 400
+
+    api_url = request.form.get("api_url", "").strip()
+    api_key = request.form.get("api_key", "").strip()
+    model = request.form.get("model", "").strip() or "gpt-5.5"
+    if not api_url or not api_key or not model:
+        return jsonify({"error": "请填写翻译/审校大模型 API 地址、Key 和模型名。"}), 400
+
+    def form_bool(name, default=False):
+        raw = request.form.get(name)
+        if raw is None:
+            return default
+        return str(raw).lower() in {"1", "true", "yes", "on"}
+
+    task_id = str(uuid.uuid4())[:8]
+    upload_dir = DOWNLOADS_DIR / "_review_uploads" / task_id
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    upload_a = request.files["file_a"]
+    upload_b = request.files["file_b"]
+    original_a = re.split(r"[\\/]", upload_a.filename or "version_a.srt")[-1]
+    original_b = re.split(r"[\\/]", upload_b.filename or "version_b.srt")[-1]
+    path_a = upload_dir / (sanitize_filename(original_a) or "version_a.srt")
+    path_b = upload_dir / (sanitize_filename(original_b) or "version_b.srt")
+    upload_a.save(path_a)
+    upload_b.save(path_b)
+
+    opts = {
+        "api_url": api_url,
+        "api_key": api_key,
+        "model": model,
+        "context_before": request.form.get("context_before", 2),
+        "context_after": request.form.get("context_after", 2),
+        "allow_z": form_bool("allow_z", True),
+        "tie_default": request.form.get("tie_default", "B"),
+        "only_changed": form_bool("only_changed", True),
+        "output_detail": form_bool("output_detail", True),
+        "original_name": original_a,
+    }
+
+    with local_subtitle_lock:
+        local_subtitle_tasks[task_id] = {
+            "id": task_id,
+            "status": "queued",
+            "progress": 0,
+            "message": "已加入交叉审校队列...",
+            "file": None,
+            "url": None,
+        }
+
+    threading.Thread(
+        target=run_cross_review_task,
+        args=(task_id, path_a, path_b, opts),
+        daemon=True,
+    ).start()
+    return jsonify({"task_id": task_id})
+
+
 @app.route("/api/local-subtitle/status/<task_id>")
 def local_subtitle_status(task_id):
     with local_subtitle_lock:
@@ -3547,12 +4699,14 @@ def start_download():
 
     download_items = data.get("download_items") or {}
     if download_items and isinstance(download_items, dict):
-        allowed_items = ("video", "audio", "cover", "description", "link_title")
+        allowed_items = ("video", "audio", "cover", "description", "translated_description", "link_title")
         download_items = {key: bool(download_items.get(key)) for key in allowed_items}
         if not any(download_items.values()):
             return jsonify({"error": "请至少选择一个下载内容"}), 400
     else:
         download_items = {}
+    if download_items.get("translated_description") and not data.get("api_key", "").strip():
+        return jsonify({"error": "生成翻译后简介需要填写下方翻译/简介 API Key"}), 400
 
     task_id = str(uuid.uuid4())[:8]
     with task_lock:
@@ -3597,6 +4751,14 @@ def start_download():
             "api_url": data.get("api_url", ""),
             "api_key": data.get("api_key", ""),
             "model": data.get("model", "gpt-4o-mini"),
+        },
+        "description_options": {
+            "api_url": data.get("api_url", ""),
+            "api_key": data.get("api_key", ""),
+            "model": data.get("model", "gpt-4o-mini"),
+            "style": data.get("description_style", ""),
+            "include_timeline": data.get("description_include_timeline", True),
+            "bilibili": data.get("description_bilibili", True),
         },
         "burn_sub": False,
         "ae_compat": data.get("ae_compat", False),
@@ -3858,69 +5020,40 @@ def generate_description():
 
         info = json.loads(result.stdout)
         title = info.get("title", "")
-        desc = info.get("description", "")
-        duration = info.get("duration", 0)
-        tags = info.get("tags", [])
-
-        minutes = int(duration // 60)
-        seconds = int(duration % 60)
-        duration_str = f"{minutes}分{seconds}秒" if minutes else f"{seconds}秒"
-
-        prompt = (
-            "你是一个专业的视频简介撰写专家。\n"
-            "请参考以下「参考风格」的写作风格、结构和格式，为目标视频撰写一段中文简介。\n\n"
-        )
-        if style:
-            prompt += f"## 参考风格\n{style}\n\n"
-        prompt += (
-            f"## 目标视频信息\n"
-            f"- 标题: {title}\n"
-            f"- 时长: {duration_str}\n"
-            f"- 标签: {', '.join(tags[:10]) if tags else '无'}\n\n"
-            f"## 原始简介\n{desc}\n\n"
-        )
-
+        timeline = ""
         if include_timeline:
             timeline = get_subtitle_timeline(url)
-            if timeline:
-                prompt += (
-                    f"## 字幕时间轴\n{timeline}\n\n"
-                    "请在简介中包含时间轴提纲。参考「参考风格」中的时间轴格式，"
-                    "将字幕内容概括为简短的中文标题。如无参考格式，使用 \"00:00 标题\" 格式，"
-                    "每个节点间隔约 30-60 秒。\n\n"
-                )
-            else:
-                prompt += "注意：该视频无可用字幕，请在简介中手动设计合理的时间轴提纲。\n\n"
 
-        prompt += (
-            "请用与参考风格一致的结构、语气和格式，撰写目标视频的中文简介。"
-            "保留原文中的关键信息，自然翻译为中文。"
+        project_dir, project_subdirs = ensure_project_dirs(title or "untitled_video")
+        write_project_notes(
+            project_dir,
+            project_subdirs,
+            info,
+            url,
+            timeline,
+            save_description=False,
+            save_link_title=True,
+        )
+        save_path, generated = generate_and_save_ai_description(
+            project_dir,
+            project_subdirs,
+            info,
+            url,
+            {
+                "api_url": api_url,
+                "api_key": api_key,
+                "model": model,
+                "style": style,
+                "include_timeline": include_timeline,
+                "bilibili": bilibili,
+            },
+            timeline=timeline,
         )
 
-        from openai import OpenAI
-        client = OpenAI(base_url=api_url, api_key=api_key)
-        response = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            max_completion_tokens=2000,
-        )
-        generated = response.choices[0].message.content
-
-        if bilibili:
-            generated = (
-                f"原视频标题：{title}\n"
-                f"原视频链接：{url}\n\n"
-                f"{generated}\n\n"
-                f"———\n"
-                f"转载自 YouTube：{url}"
-            )
-
-        safe_title = sanitize_filename(title)
-        save_path = DOWNLOADS_DIR / f"{safe_title}.ai-desc.md"
-        with open(save_path, "w", encoding="utf-8") as f:
-            f.write(f"# {title}\n\n{generated}\n")
-
-        return jsonify({"description": generated, "saved": save_path.name})
+        return jsonify({
+            "description": generated,
+            "saved": str(save_path.relative_to(DOWNLOADS_DIR)).replace("\\", "/"),
+        })
     except subprocess.TimeoutExpired:
         return jsonify({"error": "获取视频信息超时"}), 500
     except Exception as e:

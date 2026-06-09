@@ -107,6 +107,15 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .local-api-note{grid-column:1/-1;font-size:12px;color:var(--text2);line-height:1.45}
 .local-sub-prompt{width:100%;min-height:72px;margin-top:12px;padding:10px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;line-height:1.45;resize:vertical;outline:none}
 .local-sub-prompt:focus,.local-sub-grid select:focus,.local-file input:focus,.local-project-title:focus{border-color:var(--accent)}
+.translation-reference{margin-top:12px;border:1px solid var(--border);border-radius:8px;padding:12px;background:rgba(255,255,255,.02)}
+.reference-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
+.reference-title{font-size:13px;font-weight:700;color:var(--text)}
+.reference-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.reference-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.reference-grid textarea{width:100%;min-height:118px;padding:10px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;line-height:1.45;resize:vertical;outline:none;font-family:inherit}
+.reference-grid textarea:focus{border-color:var(--accent)}
+.reference-status{font-size:11px;color:var(--text2);margin-top:8px}
+@media(max-width:900px){.reference-grid{grid-template-columns:1fr}}
 .local-sub-status{margin-top:12px}
 .local-sub-status .progress-msg{margin-top:8px;text-align:left}
 #localSubDownload{display:inline-block;margin-top:8px}
@@ -143,8 +152,16 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .local-sugg-fields{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px}
 .local-sugg-fields input,.local-sugg textarea{width:100%;padding:7px 8px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:12px;outline:none}
 .local-sugg textarea{grid-column:1/-1;min-height:44px;resize:vertical;color:var(--text2)}
+.review-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.review-file input,.review-options input,.review-options select{width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;outline:none}
+.review-file input:focus,.review-options input:focus,.review-options select:focus{border-color:var(--accent)}
+.review-options{display:grid;grid-template-columns:minmax(110px,.7fr) minmax(110px,.7fr) minmax(120px,.8fr) minmax(120px,.8fr);gap:10px;margin-top:10px;align-items:end}
+.review-options label{display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--text2)}
+.review-checks{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.review-results{display:none;margin-top:10px;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);font-size:12px;color:var(--text2)}
+.review-result-links{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
 @media(max-width:820px){.local-sub-grid,.local-asr-settings{grid-template-columns:1fr 1fr}.local-file{grid-column:1/-1}.local-sub-grid .btn{grid-column:1/-1}.local-asr-settings .wide{grid-column:1/-1}}
-@media(max-width:760px){.local-preview-row{grid-template-columns:42px 1fr}.local-preview-row .src,.local-preview-row .zh,.local-preview-row .cmp{grid-column:1/-1}.clip-upload{grid-template-columns:1fr}.clip-path-actions{justify-content:flex-start}.clip-row{grid-template-columns:1fr 1fr}.clip-row .clip-title{grid-column:1/-1}.clip-row .danger{grid-column:1/-1}}
+@media(max-width:760px){.local-preview-row{grid-template-columns:42px 1fr}.local-preview-row .src,.local-preview-row .zh,.local-preview-row .cmp{grid-column:1/-1}.clip-upload{grid-template-columns:1fr}.clip-path-actions{justify-content:flex-start}.clip-row{grid-template-columns:1fr 1fr}.clip-row .clip-title{grid-column:1/-1}.clip-row .danger{grid-column:1/-1}.review-grid,.review-options{grid-template-columns:1fr}}
 
 /* Format panel */
 .format-panel{display:none}
@@ -235,7 +252,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
       <input type="text" id="urlInput" placeholder="粘贴 YouTube 视频链接..." autocomplete="off">
         <button class="btn btn-secondary" id="fmtBtn" onclick="queryFormats()" title="查询当前链接可用的视频、音频和合并格式，适合手动选择清晰度。">查看格式</button>
         <button class="btn btn-secondary" id="thumbBtn" onclick="downloadThumbnail()" title="只下载当前视频封面，不下载视频或音频；保存为 JPEG。">封面</button>
-        <button class="btn btn-primary" id="dlBtn" onclick="startDownload()" title="按上方勾选内容下载视频、音频、封面、简介和链接标题。">下载</button>
+        <button class="btn btn-primary" id="dlBtn" onclick="startDownload()" title="按上方勾选内容下载视频、音频、封面、原始简介、翻译后简介和链接标题。">下载</button>
     </div>
 
     <div class="opt-row">
@@ -246,6 +263,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
           <label class="check-pill"><input type="checkbox" id="downloadAudio" onchange="toggleType()" checked>音频</label>
           <label class="check-pill" title="下载视频封面，并统一转换为 JPEG。"><input type="checkbox" id="downloadCover" checked>封面</label>
           <label class="check-pill"><input type="checkbox" id="downloadDescription" checked>简介</label>
+          <label class="check-pill" title="调用下方翻译/简介 API，生成可直接粘贴到 B站的中文简介，保存到项目 04_简介。"><input type="checkbox" id="downloadTranslatedDescription">翻译后简介</label>
           <label class="check-pill"><input type="checkbox" id="downloadLinkTitle" checked>链接标题</label>
         </div>
       </div>
@@ -469,6 +487,20 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
       <input class="wide" type="text" id="volcAudioUrl" placeholder="标准版需要公网音频 URL；极速版留空" title="标准版音频 URL">
     </div>
     <textarea id="localSubPrompt" class="local-sub-prompt" placeholder="可选：填写视频背景、术语、人名或产品名，大模型会用它纠正识别错误并统一翻译"></textarea>
+    <div class="translation-reference">
+      <div class="reference-head">
+        <div class="reference-title">翻译参考资料</div>
+        <div class="reference-actions">
+          <button class="btn btn-secondary" id="buildReferenceBtn" onclick="buildTranslationReference()" title="读取当前字幕样本和左侧资料，整理成术语表、背景、ASR 易错词和翻译规则。普通 API 不会自动联网；支持联网的模型可按资料中的关键词补充。">整理参考</button>
+          <button class="btn btn-secondary" onclick="clearTranslationReference()" title="清空当前参考资料和整理结果，本次检查与翻译不再使用它们。">清空参考</button>
+        </div>
+      </div>
+      <div class="reference-grid">
+        <textarea id="translationReferenceMaterials" placeholder="粘贴参考资料、搜索结果、网页摘要、人物/公司/产品说明、术语表或关键词..."></textarea>
+        <textarea id="translationReferenceGuide" placeholder="整理后的翻译参考会显示在这里，可手动修改；AI 检查单词和翻译会自动使用这份内容。"></textarea>
+      </div>
+      <div class="reference-status" id="translationReferenceStatus">参考表会保存到当前项目的 10_翻译/translation_reference.md。</div>
+    </div>
     <div class="opt-row" style="margin-top:12px;gap:10px">
       <div class="opt-group" style="min-width:130px">
         <label>字幕对比翻译</label>
@@ -493,9 +525,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
       <button class="btn btn-secondary" onclick="checkLocalWords()" title="使用下方翻译 API 检查英文识别里的术语、人名、公司名和大小写错误。">AI 检查单词</button>
       <button class="btn btn-secondary" onclick="applyLocalCorrections()" title="应用上方 AI 检查列表里勾选并可手动修改的校正建议。">应用校正</button>
       <button class="btn btn-secondary" onclick="translateLocalSubtitle()" title="使用下方翻译 API 把当前英文字幕翻译成中文，并保留英文原文。">翻译</button>
+      <button class="btn btn-secondary" onclick="clearLocalTranslations()" title="只清空当前会话里的中文字幕和对比译文，保留识别/校正后的英文；不会删除已经导出的字幕文件。">清除翻译</button>
       <select id="localSubOrder" title="双语顺序">
-        <option value="en_top" selected>英文在上</option>
-        <option value="zh_top">中文在上</option>
+        <option value="zh_top" selected>中文在上</option>
+        <option value="en_top">英文在上</option>
       </select>
       <button class="btn btn-primary" onclick="exportLocalSubtitle()" title="按当前导出格式和双语顺序，导出英文、中文或双语 SRT。">导出字幕</button>
       <button class="btn btn-secondary" id="localOneclickBtn" onclick="startLocalSubtitle()" title="自动完成：识别音视频、保存 raw_en、合并短句、智能分段、AI 检查单词、应用校正、翻译中文、导出所选字幕。">一键生成</button>
@@ -535,6 +568,58 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
     <div class="local-suggestions" id="localSuggestions" style="display:none"></div>
     <div class="local-preview" id="localPreview"><div class="empty">先选择本地视频、音频或 SRT 文件</div></div>
     <div class="hint">读取本地音频/视频/SRT 后，会按项目标题保存到 downloads/projects/视频标题。音视频只使用在线识别 API 生成 raw_en，再把 split_en、corrected_en、zh、双语字幕放进 10_翻译。“一键生成”会自动执行在线识别、合并短句、智能分段、AI 检查、应用校正、翻译和导出。</div>
+  </div>
+
+  <!-- Cross Review -->
+  <div class="card video-opt" id="srtReviewCard">
+    <div class="card-title">双版本字幕评分与交叉审校合并</div>
+    <div class="hint" style="margin-bottom:10px">选择两个双语 SRT：A 为一个翻译版本，B 为另一个翻译版本。审校时会随机打乱成版本 X/Y，大模型不会知道哪个版本用了参考资料。</div>
+    <div class="review-grid">
+      <label class="review-file">A 版 SRT
+        <input type="file" id="reviewAFile" accept=".srt" title="选择英文原文直接翻译版，或任意一个待比较的双语 SRT。">
+      </label>
+      <label class="review-file">B 版 SRT
+        <input type="file" id="reviewBFile" accept=".srt" title="选择参考资料/术语提示版，或另一个待比较的双语 SRT。">
+      </label>
+    </div>
+    <div class="review-options">
+      <label>审校模型
+        <input type="text" id="reviewModel" value="gpt-5.5" title="用于逐条评分和交叉审校的大模型名称，默认 GPT-5.5。">
+      </label>
+      <label>上文窗口
+        <input type="number" id="reviewContextBefore" min="0" max="10" value="2" title="每条审校时带入前面多少条字幕作为上下文。">
+      </label>
+      <label>下文窗口
+        <input type="number" id="reviewContextAfter" min="0" max="10" value="2" title="每条审校时带入后面多少条字幕作为上下文。">
+      </label>
+      <label>TIE 默认
+        <select id="reviewTieDefault" title="当模型认为两个版本只是风格差异时，最终默认采用哪个版本。">
+          <option value="B" selected>采用 B</option>
+          <option value="A">采用 A</option>
+        </select>
+      </label>
+    </div>
+    <div class="review-checks">
+      <label class="check-pill" title="两个版本都有问题时，允许模型生成严格忠实英文的 Z 版。"><input type="checkbox" id="reviewAllowZ" checked>允许 Z 版</label>
+      <label class="check-pill" title="默认只审校 A/B 中文不同的条目；完全相同的条目不会调用模型。"><input type="checkbox" id="reviewOnlyChanged" checked>只审校变化条目</label>
+      <label class="check-pill" title="输出逐条 CSV 报告，包含 A/B 分数、错误类型、原因和最终采用。"><input type="checkbox" id="reviewOutputDetail" checked>输出详细报告</label>
+    </div>
+    <div class="local-workbench-actions">
+      <button class="btn btn-primary" id="startSrtReviewBtn" onclick="startSrtReview()" title="上传两个双语 SRT，按对齐检查、随机 X/Y 审校、评分选择、必要时生成 Z 版的流程合并最终字幕。">开始交叉审校</button>
+    </div>
+    <div class="local-sub-status" id="srtReviewStatus" style="display:none">
+      <div class="progress-bar-bg"><div class="progress-bar-fill" id="srtReviewFill"></div></div>
+      <div class="progress-msg" id="srtReviewMsg">准备中...</div>
+    </div>
+    <div class="review-results" id="srtReviewResults">
+      <div id="srtReviewSummary">等待结果。</div>
+      <div class="review-result-links">
+        <a class="btn-sm" id="reviewZipDownload" href="#" style="display:none" title="下载包含最终 SRT、CSV 报告和 JSON 汇总的 ZIP。">下载结果 ZIP</a>
+        <a class="btn-sm" id="reviewSrtDownload" href="#" style="display:none" title="只下载交叉审校合并后的最终双语 SRT。">最终 SRT</a>
+        <a class="btn-sm" id="reviewCsvDownload" href="#" style="display:none" title="下载逐条翻译评分 CSV 报告。">评分 CSV</a>
+        <a class="btn-sm" id="reviewJsonDownload" href="#" style="display:none" title="下载总体评分汇总 JSON。">汇总 JSON</a>
+      </div>
+    </div>
   </div>
 
   <!-- AI Description -->
@@ -1129,6 +1214,7 @@ function doDownload(url, extra){
     audio: document.getElementById('downloadAudio').checked,
     cover: document.getElementById('downloadCover').checked,
     description: document.getElementById('downloadDescription').checked,
+    translated_description: document.getElementById('downloadTranslatedDescription').checked,
     link_title: document.getElementById('downloadLinkTitle').checked,
   };
   if(!Object.values(downloadItems).some(Boolean)){
@@ -1152,6 +1238,9 @@ function doDownload(url, extra){
     api_url: document.getElementById('aiApiUrl').value,
     api_key: document.getElementById('aiApiKey').value,
     model: document.getElementById('aiModel').value || 'gpt-4o-mini',
+    description_style: document.getElementById('refStyleText').value,
+    description_include_timeline: document.getElementById('includeTimeline').checked,
+    description_bilibili: true,
   };
   const subUi = collectSubtitleUiSettings();
   Object.assign(body, {
@@ -1176,6 +1265,13 @@ function doDownload(url, extra){
   if(body.download_items.video && body.dual_subtitle && body.sub_mode === 'zh_en' && body.translate_sub){
     if(!String(body.api_url || '').trim() || !String(body.api_key || '').trim()){
       showToast('请先填写 AI API 地址和 Key，才能自动翻译中文字幕');
+      resetBtn();
+      return;
+    }
+  }
+  if(body.download_items.translated_description){
+    if(!String(body.api_key || '').trim()){
+      showToast('请先填写下方翻译/简介 API Key，才能生成翻译后简介');
       resetBtn();
       return;
     }
@@ -1243,7 +1339,69 @@ function getLocalAiSettings(){
   const api_key = document.getElementById('aiApiKey').value.trim();
   const model = document.getElementById('aiModel').value.trim() || 'gpt-4o-mini';
   if(!api_url || !api_key || !model) throw new Error('请先填写下方 AI 翻译设置；这里需要翻译模型 Key，不是火山识别 Key');
-  return { api_url, api_key, model, prompt: document.getElementById('localSubPrompt').value };
+  const rawPrompt = document.getElementById('localSubPrompt').value.trim();
+  const reference_materials = document.getElementById('translationReferenceMaterials').value.trim();
+  const translation_reference = document.getElementById('translationReferenceGuide').value.trim();
+  const promptParts = [];
+  if(rawPrompt) promptParts.push(`视频背景/术语提示：\n${rawPrompt}`);
+  if(translation_reference){
+    promptParts.push(`翻译参考表（必须优先遵守）：\n${translation_reference}`);
+  }else if(reference_materials){
+    promptParts.push(`用户提供参考资料：\n${reference_materials}`);
+  }
+  return {
+    api_url,
+    api_key,
+    model,
+    prompt: promptParts.join('\n\n'),
+    raw_prompt: rawPrompt,
+    reference_materials,
+    translation_reference
+  };
+}
+
+async function buildTranslationReference(){
+  if(!localSessionId){ showToast('请先读取字幕，再整理翻译参考'); return; }
+  let cfg;
+  try{ cfg = getLocalAiSettings(); }catch(e){ showToast(e.message); return; }
+  const btn = document.getElementById('buildReferenceBtn');
+  const status = document.getElementById('translationReferenceStatus');
+  btn.disabled = true;
+  btn.textContent = '整理中...';
+  setLocalStatus(20, '正在整理翻译参考资料...');
+  try{
+    const res = await fetch('/api/local-subtitle/reference', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        session_id: localSessionId,
+        api_url: cfg.api_url,
+        api_key: cfg.api_key,
+        model: cfg.model,
+        prompt: cfg.raw_prompt,
+        reference_materials: cfg.reference_materials
+      })
+    });
+    const data = await res.json();
+    if(data.error) throw new Error(data.error);
+    document.getElementById('translationReferenceGuide').value = data.translation_reference || '';
+    if(data.reference_materials) document.getElementById('translationReferenceMaterials').value = data.reference_materials;
+    status.textContent = data.reference_file ? `已保存：${data.reference_file}` : '翻译参考资料已整理。';
+    setLocalStatus(100, '翻译参考资料已整理');
+    showToast('翻译参考已整理');
+  }catch(e){
+    showToast('整理参考失败: ' + e.message);
+  }finally{
+    btn.disabled = false;
+    btn.textContent = '整理参考';
+  }
+}
+
+function clearTranslationReference(){
+  document.getElementById('translationReferenceMaterials').value = '';
+  document.getElementById('translationReferenceGuide').value = '';
+  document.getElementById('translationReferenceStatus').textContent = '参考表会保存到当前项目的 10_翻译/translation_reference.md。';
+  showToast('翻译参考已清空');
 }
 
 function toggleCompareTranslate(){
@@ -1332,6 +1490,12 @@ function renderLocalSession(data){
   const rows = data.entries || [];
   const translated = data.translated || 0;
   const preview = document.getElementById('localPreview');
+  if(typeof data.reference_materials === 'string'){
+    document.getElementById('translationReferenceMaterials').value = data.reference_materials;
+  }
+  if(typeof data.translation_reference === 'string'){
+    document.getElementById('translationReferenceGuide').value = data.translation_reference;
+  }
   document.getElementById('localSubMsg').textContent =
     `${data.name || '本地字幕'}：${data.segments || rows.length} 条，已翻译 ${translated} 条`;
 
@@ -1392,6 +1556,110 @@ async function pollLocalTask(taskId, done){
       }
     }, 1200);
   });
+}
+
+function setSrtReviewStatus(pct, message){
+  const status = document.getElementById('srtReviewStatus');
+  const fill = document.getElementById('srtReviewFill');
+  const msg = document.getElementById('srtReviewMsg');
+  status.style.display = '';
+  fill.style.width = Math.max(0, Math.min(100, pct || 0)) + '%';
+  msg.textContent = message || '';
+}
+
+function showReviewLink(id, url){
+  const link = document.getElementById(id);
+  if(url){
+    link.href = url;
+    link.style.display = '';
+  }else{
+    link.style.display = 'none';
+  }
+}
+
+function getReviewAiSettings(){
+  const api_url = document.getElementById('aiApiUrl').value.trim();
+  const api_key = document.getElementById('aiApiKey').value.trim();
+  const model = document.getElementById('reviewModel').value.trim() || document.getElementById('aiModel').value.trim() || 'gpt-5.5';
+  if(!api_url || !api_key || !model){
+    throw new Error('请先在下方 AI 翻译/简介设置里填写 API 地址和 Key，并确认审校模型名。');
+  }
+  return { api_url, api_key, model };
+}
+
+async function pollSrtReviewTask(taskId){
+  return new Promise(resolve => {
+    const timer = setInterval(async () => {
+      try{
+        const res = await fetch('/api/local-subtitle/status/' + taskId);
+        const d = await res.json();
+        if(d.error) throw new Error(d.error);
+        setSrtReviewStatus(d.progress || 0, d.message || '处理中...');
+        if(d.status === 'completed'){
+          clearInterval(timer);
+          const box = document.getElementById('srtReviewResults');
+          const summary = d.summary_data || {};
+          document.getElementById('srtReviewSummary').textContent =
+            `完成：总计 ${summary.total || 0} 条，变化 ${summary.changed || 0} 条，采用 A ${summary.use_a || 0} 条，采用 B ${summary.use_b || 0} 条，生成 Z ${summary.use_z || 0} 条，高风险 ${summary.high_risk || 0} 条。`;
+          box.style.display = '';
+          showReviewLink('reviewZipDownload', d.zip_url || d.url);
+          showReviewLink('reviewSrtDownload', d.srt_url);
+          showReviewLink('reviewCsvDownload', d.csv_url);
+          showReviewLink('reviewJsonDownload', d.summary_url);
+          showToast('交叉审校合并完成');
+          loadFiles();
+          resolve(d);
+        }else if(d.status === 'error'){
+          clearInterval(timer);
+          showToast('交叉审校失败: ' + (d.message || d.error || '未知错误'));
+          resolve(d);
+        }
+      }catch(e){
+        clearInterval(timer);
+        showToast('交叉审校失败: ' + e.message);
+        resolve(null);
+      }
+    }, 1200);
+  });
+}
+
+async function startSrtReview(){
+  const aFile = document.getElementById('reviewAFile').files[0];
+  const bFile = document.getElementById('reviewBFile').files[0];
+  if(!aFile || !bFile){
+    showToast('请先选择 A 版和 B 版两个 SRT 文件');
+    return;
+  }
+  let cfg;
+  try{ cfg = getReviewAiSettings(); }catch(e){ showToast(e.message); return; }
+  const btn = document.getElementById('startSrtReviewBtn');
+  btn.disabled = true;
+  btn.textContent = '审校中...';
+  document.getElementById('srtReviewResults').style.display = 'none';
+  setSrtReviewStatus(0, '正在提交交叉审校任务...');
+  try{
+    const fd = new FormData();
+    fd.append('file_a', aFile);
+    fd.append('file_b', bFile);
+    fd.append('api_url', cfg.api_url);
+    fd.append('api_key', cfg.api_key);
+    fd.append('model', cfg.model);
+    fd.append('context_before', document.getElementById('reviewContextBefore').value || '2');
+    fd.append('context_after', document.getElementById('reviewContextAfter').value || '2');
+    fd.append('allow_z', document.getElementById('reviewAllowZ').checked ? '1' : '0');
+    fd.append('tie_default', document.getElementById('reviewTieDefault').value || 'B');
+    fd.append('only_changed', document.getElementById('reviewOnlyChanged').checked ? '1' : '0');
+    fd.append('output_detail', document.getElementById('reviewOutputDetail').checked ? '1' : '0');
+    const res = await fetch('/api/srt-review/start', { method:'POST', body:fd });
+    const data = await res.json();
+    if(data.error) throw new Error(data.error);
+    await pollSrtReviewTask(data.task_id);
+  }catch(e){
+    showToast('交叉审校失败: ' + e.message);
+  }finally{
+    btn.disabled = false;
+    btn.textContent = '开始交叉审校';
+  }
 }
 
 async function importLocalSubtitle(){
@@ -1554,6 +1822,28 @@ async function translateLocalSubtitle(){
     if(data.error) throw new Error(data.error);
     await pollLocalTask(data.task_id, () => showToast('翻译完成'));
   }catch(e){ showToast('翻译失败: ' + e.message); }
+}
+
+async function clearLocalTranslations(){
+  if(!localSessionId){ showToast('请先读取字幕'); return; }
+  if(!confirm('清空当前预览中的中文翻译和对比译文？已导出的字幕文件不会删除，英文识别内容会保留。')) return;
+  setLocalStatus(35, '正在清除当前会话翻译...');
+  try{
+    const res = await fetch('/api/local-subtitle/clear-translations', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ session_id: localSessionId })
+    });
+    const data = await res.json();
+    if(data.error) throw new Error(data.error);
+    renderLocalSession(data);
+    const link = document.getElementById('localSubDownload');
+    link.style.display = 'none';
+    setLocalStatus(100, `已清除 ${data.cleared_translations || 0} 条中文翻译、${data.cleared_compare || 0} 条对比译文，英文已保留`);
+    showToast('翻译已清除，英文已保留');
+  }catch(e){
+    showToast('清除翻译失败: ' + e.message);
+  }
 }
 
 async function exportLocalSubtitle(){
@@ -1973,6 +2263,8 @@ async function startLocalSubtitle(){
   fd.append('api_key', cfg.api_key);
   fd.append('model', cfg.model);
   fd.append('prompt', cfg.prompt);
+  fd.append('reference_materials', cfg.reference_materials || '');
+  fd.append('translation_reference', cfg.translation_reference || '');
   fd.append('compare_enabled', compareCfg.compare_enabled ? '1' : '0');
   fd.append('compare_api_url', compareCfg.compare_api_url || '');
   fd.append('compare_api_key', compareCfg.compare_api_key || '');
@@ -1980,7 +2272,7 @@ async function startLocalSubtitle(){
   fd.append('language', document.getElementById('localSubLang').value);
   fd.append('output_mode', document.getElementById('localSubOutput').value);
   fd.append('order', document.getElementById('localSubOrder').value);
-  fd.append('initial_prompt', cfg.prompt);
+  fd.append('initial_prompt', cfg.raw_prompt || '');
   fd.append('project_title', document.getElementById('localProjectTitle').value);
   Object.entries(asrCfg).forEach(([k, v]) => fd.append(k, v));
 
