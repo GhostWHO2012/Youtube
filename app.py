@@ -8,7 +8,6 @@ import random
 import re
 import shutil
 import subprocess
-import tempfile
 import threading
 import time
 import urllib.parse
@@ -62,6 +61,8 @@ task_lock = threading.Lock()
 local_subtitle_tasks = {}
 local_subtitle_sessions = {}
 local_subtitle_lock = threading.Lock()
+font_file_cache = {}
+font_measure_cache = {}
 
 
 def sanitize_filename(name):
@@ -178,6 +179,37 @@ def path_download_info(path):
         return {"file": str(path), "url": "", "path": str(path)}
 
 
+def resolve_download_directory_candidate(path):
+    if not path:
+        return None
+    candidate = Path(str(path)).expanduser()
+    if not candidate.is_absolute():
+        candidate = DOWNLOADS_DIR / candidate
+    try:
+        candidate = candidate.resolve()
+    except Exception:
+        return None
+    if candidate.exists() and candidate.is_file():
+        candidate = candidate.parent.resolve()
+    try:
+        candidate.relative_to(DOWNLOADS_DIR.resolve())
+    except ValueError:
+        return None
+    if not candidate.exists() or not candidate.is_dir():
+        return None
+    return candidate
+
+
+def open_directory_with_system_manager(path):
+    if os.name == "nt":
+        os.startfile(str(path))
+        return
+    opener = shutil.which("xdg-open") or shutil.which("open")
+    if not opener:
+        raise RuntimeError("No system file manager opener is available")
+    subprocess.Popen([opener, str(path)])
+
+
 def seconds_to_desc_time(seconds):
     seconds = max(0, int(seconds or 0))
     h, rem = divmod(seconds, 3600)
@@ -265,7 +297,8 @@ def generate_ai_description_text(
     duration_str = format_duration_zh(info.get("duration", 0))
     prompt = (
         "你是一个专业的视频简介撰写和英译中编辑。\n"
-        "请把目标视频的英文信息整理成中文简介，保留 AI、技术、产品、人名、公司名等关键词的准确性。\n\n"
+        "请把目标视频的英文信息整理成中文简介，并先给出结合背景的标题翻译。\n"
+        "保留 AI、技术、产品、人名、公司名、模型名等关键词的准确性；专属名称默认保留英文，不要强行音译。\n\n"
     )
     if style:
         prompt += f"## 参考风格\n{style}\n\n"
@@ -288,14 +321,22 @@ def generate_ai_description_text(
     if bilibili:
         prompt += (
             "请输出可以直接粘贴到 B站简介区的纯文本，格式要求：\n"
-            "1. 开头给出 1-2 句中文内容简介，不要写营销口号。\n"
-            "2. 用“看点：”列出 3-6 个简短要点。\n"
-            "3. 如果有时间轴，用“时间轴：”列出。\n"
-            "4. 末尾保留“原视频标题：”“原视频链接：”。\n"
-            "5. 不要使用 Markdown 标题符号，不要输出解释过程。\n"
+            "1. 开头必须先输出“标题翻译：”小节，包含四行：\n"
+            "   - 英文原题：保留原视频英文标题。\n"
+            "   - 中文标题：结合视频背景翻译出的中文标题，适合 B站读者，但不要标题党。\n"
+            "   - 中英文对照：用简短文字说明英文标题核心词和中文标题如何对应。\n"
+            "   - 翻译理由：说明为什么这样翻译，必须结合原始简介、标签、人物/公司/产品背景和视频主题。\n"
+            "2. 然后给出 1-2 句中文内容简介，不要写营销口号。\n"
+            "3. 用“看点：”列出 3-6 个简短要点。\n"
+            "4. 如果有时间轴，用“时间轴：”列出。\n"
+            "5. 末尾保留“原视频标题：”“原视频链接：”。\n"
+            "6. 不要使用 Markdown 标题符号，不要输出解释过程。\n"
         )
     else:
-        prompt += "请输出自然、准确的中文简介，不要输出解释过程。"
+        prompt += (
+            "请输出自然、准确的中文简介，并在开头包含：英文原题、中文标题、中英文对照、翻译理由。"
+            "标题翻译理由必须结合原始简介、标签、人物/公司/产品背景和视频主题。不要输出额外解释过程。"
+        )
 
     from openai import OpenAI
     client_kwargs = {"api_key": api_key}
@@ -589,19 +630,46 @@ def translation_version_label(context):
     return "有翻译参考资料版" if translation_reference_used(context) else "无翻译参考资料版"
 
 
+def translation_model_label(context):
+    context = context or {}
+    model = (
+        str(context.get("translation_model") or "").strip()
+        or str(context.get("model") or "").strip()
+    )
+    if not model:
+        return ""
+    model = model.split("/")[-1].strip()
+    model = re.sub(r"(?i)^claude-", "", model)
+    model = re.sub(r"(?i)^anthropic-", "", model)
+    model = re.sub(r"(?i)^openai-", "", model)
+    model = re.sub(r"(?i)^gpt-", "GPT", model)
+    model = re.sub(r"(?i)^opus-", "OPUS", model)
+    model = re.sub(r"(?i)^sonnet-", "SONNET", model)
+    model = re.sub(r"(?i)^haiku-", "HAIKU", model)
+    model = re.sub(r"(?i)opus-(\d+(?:\.\d+)*)", r"OPUS\1", model)
+    model = re.sub(r"(?i)sonnet-(\d+(?:\.\d+)*)", r"SONNET\1", model)
+    model = re.sub(r"(?i)haiku-(\d+(?:\.\d+)*)", r"HAIKU\1", model)
+    model = re.sub(r"(?i)GPT(\d)", r"GPT\1", model)
+    model = re.sub(r"[-_\s]+", "-", model).strip("-_. ")
+    model = sanitize_filename(model).replace("_", "-")
+    return model[:48]
+
+
 def subtitle_output_filename(stem, output_mode, order="zh_top", context=None, compare=False):
     stem = local_media_output_stem(stem, "subtitle")
     if output_mode == "en":
         return f"{stem}.英文原版.srt"
 
     version = translation_version_label(context)
+    model_label = translation_model_label(context)
+    model_prefix = f"{model_label}" if model_label else ""
     if compare:
-        return f"{stem}.{version}.对比翻译.中文字幕.srt"
+        return f"{stem}.{model_prefix}{version}.对比翻译.中文字幕.srt"
     if output_mode == "zh":
-        return f"{stem}.{version}.中文字幕.srt"
+        return f"{stem}.{model_prefix}{version}.中文字幕.srt"
 
     order_label = "中文在上" if order == "zh_top" else "英文在上"
-    return f"{stem}.{version}.双语.{order_label}.srt"
+    return f"{stem}.{model_prefix}{version}.双语.{order_label}.srt"
 
 
 def save_session_translation_artifacts(session, stem="subtitle"):
@@ -625,24 +693,16 @@ def save_session_translation_artifacts(session, stem="subtitle"):
         zh_path = translation_dir / subtitle_output_filename(stem, "zh", context=session)
         zh_path.write_text(zh, encoding="utf-8")
         outputs["zh"] = zh_path
-        for order in ("en_top", "zh_top"):
-            bi_path = translation_dir / subtitle_output_filename(stem, "bilingual", order=order, context=session)
-            bi_path.write_text(entries_to_srt(entries, bilingual=True, order=order), encoding="utf-8")
-            outputs[f"bilingual_{order}"] = bi_path
-    if any((e.get("translation_compare") or "").strip() for e in entries):
-        compare_entries = [
-            {**e, "source": e.get("translation_compare", ""), "translation": ""}
-            for e in entries
-        ]
-        compare_path = translation_dir / subtitle_output_filename(stem, "zh", context=session, compare=True)
-        compare_path.write_text(entries_to_srt(compare_entries, bilingual=False), encoding="utf-8")
-        outputs["compare_zh"] = compare_path
+        bi_path = translation_dir / subtitle_output_filename(stem, "bilingual", order="zh_top", context=session)
+        bi_path.write_text(entries_to_srt(entries, bilingual=True, order="zh_top"), encoding="utf-8")
+        outputs["bilingual_zh_top"] = bi_path
     if project_dir:
         (translation_dir / "translation_manifest.json").write_text(
             json.dumps(
                 {
                     "project_dir": project_dir,
                     "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "translation_model": session.get("translation_model") or session.get("model", ""),
                     "files": {k: rel_download_path(v) for k, v in outputs.items()},
                 },
                 ensure_ascii=False,
@@ -901,6 +961,108 @@ def clamp_int(value, min_value, max_value, default):
     return max(min_value, min(max_value, value))
 
 
+def normalize_font_label(name):
+    name = str(name or "").replace(" (TrueType)", "").replace(" (OpenType)", "")
+    name = re.sub(r"\s+", " ", name).strip().lower()
+    return name
+
+
+def windows_font_dirs():
+    dirs = []
+    windir = os.environ.get("WINDIR") or r"C:\Windows"
+    dirs.append(Path(windir) / "Fonts")
+    local_app = os.environ.get("LOCALAPPDATA")
+    if local_app:
+        dirs.append(Path(local_app) / "Microsoft" / "Windows" / "Fonts")
+    dirs.append(Path(os.path.expanduser("~/Fonts")))
+    return dirs
+
+
+def resolve_font_file(font_name):
+    key = normalize_font_label(font_name)
+    if not key:
+        return None
+    if key in font_file_cache:
+        return font_file_cache[key]
+
+    matches = []
+    for root in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+        try:
+            reg_key = winreg.OpenKey(root, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts")
+        except Exception:
+            continue
+        i = 0
+        while True:
+            try:
+                name, value, _type = winreg.EnumValue(reg_key, i)
+            except OSError:
+                break
+            clean_name = normalize_font_label(name)
+            if key == clean_name or key in clean_name or clean_name in key:
+                matches.append(str(value))
+            i += 1
+        try:
+            winreg.CloseKey(reg_key)
+        except Exception:
+            pass
+
+    font_dirs = windows_font_dirs()
+    for value in matches:
+        candidate = Path(value)
+        candidates = [candidate] if candidate.is_absolute() else [d / value for d in font_dirs]
+        for item in candidates:
+            if item.exists():
+                font_file_cache[key] = str(item)
+                return font_file_cache[key]
+
+    compact = re.sub(r"[^a-z0-9]+", "", key)
+    for directory in font_dirs:
+        if not directory.exists():
+            continue
+        for item in directory.glob("*"):
+            if item.suffix.lower() not in (".ttf", ".otf", ".ttc"):
+                continue
+            stem = re.sub(r"[^a-z0-9]+", "", item.stem.lower())
+            if compact and (compact == stem or compact in stem or stem in compact):
+                font_file_cache[key] = str(item)
+                return font_file_cache[key]
+
+    font_file_cache[key] = None
+    return None
+
+
+def measure_text_width_with_font(text, font_size, font_name):
+    cache_key = (normalize_font_label(font_name), int(font_size))
+    try:
+        from PIL import ImageFont
+    except Exception:
+        return None
+
+    font = font_measure_cache.get(cache_key)
+    if font is None:
+        font_path = resolve_font_file(font_name) or font_name
+        for candidate in (font_path, "Microsoft YaHei", "msyh.ttc", "Arial"):
+            try:
+                font = ImageFont.truetype(candidate, int(font_size))
+                break
+            except Exception:
+                font = None
+        if font is None:
+            font_measure_cache[cache_key] = False
+            return None
+        font_measure_cache[cache_key] = font
+    if font is False:
+        return None
+
+    try:
+        if hasattr(font, "getlength"):
+            return float(font.getlength(str(text or "")))
+        bbox = font.getbbox(str(text or ""))
+        return float(bbox[2] - bbox[0])
+    except Exception:
+        return None
+
+
 def ass_escape_text(text):
     """Escape text that would otherwise be parsed as ASS override tags."""
     text = str(text or "").replace("\r", " ").replace("\n", " ")
@@ -908,10 +1070,18 @@ def ass_escape_text(text):
     return text.strip()
 
 
-def estimate_ass_text_width(text, font_size):
+def estimate_ass_text_width(text, font_size, letter_spacing=0, font_name=None):
     """Estimate rendered text width for background placement."""
+    chars = list(str(text or ""))
+    if font_name:
+        measured = measure_text_width_with_font(text, font_size, font_name)
+        if measured is not None:
+            if len(chars) > 1:
+                measured += (len(chars) - 1) * float(letter_spacing or 0)
+            return max(measured * 1.02, font_size)
+
     width = 0.0
-    for ch in str(text or ""):
+    for ch in chars:
         code = ord(ch)
         if ch.isspace():
             width += font_size * 0.32
@@ -927,15 +1097,17 @@ def estimate_ass_text_width(text, font_size):
             width += font_size * 0.62
         else:
             width += font_size * 0.52
+    if len(chars) > 1:
+        width += (len(chars) - 1) * float(letter_spacing or 0)
     return max(width, font_size)
 
 
-def wrap_subtitle_text(text, font_size, max_width):
+def wrap_subtitle_text(text, font_size, max_width, letter_spacing=0, font_name=None):
     """Wrap one subtitle line so ASS and the custom background agree."""
     text = ass_escape_text(text)
     if not text:
         return []
-    if estimate_ass_text_width(text, font_size) <= max_width:
+    if estimate_ass_text_width(text, font_size, letter_spacing, font_name) <= max_width:
         return [text]
 
     chunks = []
@@ -943,16 +1115,16 @@ def wrap_subtitle_text(text, font_size, max_width):
     tokens = re.findall(r"\S+\s*", text)
     for token in tokens:
         candidate = current + token
-        if current and estimate_ass_text_width(candidate.strip(), font_size) > max_width:
+        if current and estimate_ass_text_width(candidate.strip(), font_size, letter_spacing, font_name) > max_width:
             chunks.append(current.strip())
             current = token
         else:
             current = candidate
 
-        while estimate_ass_text_width(current.strip(), font_size) > max_width and len(current.strip()) > 1:
+        while estimate_ass_text_width(current.strip(), font_size, letter_spacing, font_name) > max_width and len(current.strip()) > 1:
             part = ""
             for ch in current.strip():
-                if part and estimate_ass_text_width(part + ch, font_size) > max_width:
+                if part and estimate_ass_text_width(part + ch, font_size, letter_spacing, font_name) > max_width:
                     break
                 part += ch
             chunks.append(part.strip())
@@ -970,6 +1142,32 @@ def rounded_rect_ass_path(width, height, radius):
     radius = max(0, min(round(radius), width // 2, height // 2))
     x1, y1 = -width // 2, -height // 2
     x2, y2 = x1 + width, y1 + height
+    if radius <= 0:
+        return f"m {x1} {y1} l {x2} {y1} l {x2} {y2} l {x1} {y2}"
+
+    k = 0.55228475
+    c = round(radius * k)
+    r = radius
+    return (
+        f"m {x1 + r} {y1} "
+        f"l {x2 - r} {y1} "
+        f"b {x2 - r + c} {y1} {x2} {y1 + r - c} {x2} {y1 + r} "
+        f"l {x2} {y2 - r} "
+        f"b {x2} {y2 - r + c} {x2 - r + c} {y2} {x2 - r} {y2} "
+        f"l {x1 + r} {y2} "
+        f"b {x1 + r - c} {y2} {x1} {y2 - r + c} {x1} {y2 - r} "
+        f"l {x1} {y1 + r} "
+        f"b {x1} {y1 + r - c} {x1 + r - c} {y1} {x1 + r} {y1}"
+    )
+
+
+def rounded_rect_ass_path_origin(width, height, radius):
+    """Build an ASS vector path for a rounded rectangle from top-left origin."""
+    width = max(1, round(width))
+    height = max(1, round(height))
+    radius = max(0, min(round(radius), width // 2, height // 2))
+    x1, y1 = 0, 0
+    x2, y2 = width, height
     if radius <= 0:
         return f"m {x1} {y1} l {x2} {y1} l {x2} {y2} l {x1} {y2}"
 
@@ -1026,6 +1224,8 @@ def generate_dual_ass(merged_segs, opts):
     sub_order = opts.get('sub_order', 'zh_top')
     sub_pos = clamp_int(opts.get('sub_pos', 2), 1, 9, 2)
     margin_v = clamp_int(opts.get('margin_v', 30), 0, 1000, 30)
+    letter_spacing = clamp_int(opts.get('letter_spacing', 0), -20, 100, 0)
+    line_spacing = clamp_int(opts.get('line_spacing', 0), -80, 200, 0)
     play_res_x = int(opts.get('play_res_x', 1920) or 1920)
     play_res_y = int(opts.get('play_res_y', 1080) or 1080)
     side_margin = max(10, round(play_res_x * 30 / 1920))
@@ -1056,7 +1256,7 @@ def generate_dual_ass(merged_segs, opts):
         "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
         "Alignment, MarginL, MarginR, MarginV, Encoding\n"
         f"Style: Default,{font},{size},{color},{color},"
-        f"{outline},&H80000000,-1,0,0,0,100,100,0,0,1,{outline_val},1,"
+        f"{outline},&H80000000,-1,0,0,0,100,100,{letter_spacing},0,1,{outline_val},1,"
         f"{sub_pos},{side_margin},{side_margin},{margin_v},1\n\n"
         f"Style: Bg,Arial,10,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,"
         f"0,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1\n\n"
@@ -1083,36 +1283,51 @@ def generate_dual_ass(merged_segs, opts):
         if parts:
             lines = []
             for part in parts:
-                lines.extend(wrap_subtitle_text(part, size, max_text_width))
+                lines.extend(wrap_subtitle_text(part, size, max_text_width, letter_spacing, font))
             if not lines:
                 continue
 
-            widths = [estimate_ass_text_width(line, size) for line in lines]
+            widths = [estimate_ass_text_width(line, size, letter_spacing, font) for line in lines]
             text_w = min(max(widths), max_text_width)
-            line_h = size * 1.18
+            line_h = max(size * 0.75, size * 1.18 + line_spacing)
             text_h = max(line_h, len(lines) * line_h)
-            text = "\\N".join(lines)
+            center_x, center_y = subtitle_anchor_center(
+                sub_pos, play_res_x, play_res_y, side_margin, margin_v, text_w, text_h
+            )
 
             if bg_enabled:
                 padx = max(text_w * bg_width_pct / 200, size * 0.3) + outline_val
                 pady = max(text_h * bg_height_pct / 200, size * 0.2) + outline_val
-                bg_w = text_w + 2 * padx
+                max_bg_w = max(size, play_res_x - side_margin * 2)
+                bg_w = min(text_w + 2 * padx, max_bg_w)
                 bg_h = text_h + 2 * pady
                 radius = bg_radius / 100 * min(bg_w, bg_h) / 2
-                center_x, center_y = subtitle_anchor_center(
-                    sub_pos, play_res_x, play_res_y, side_margin, margin_v, text_w, text_h
-                )
-                center_x += bg_offset_x * size / 50
-                center_y += bg_offset_y * size / 50
-                path = rounded_rect_ass_path(bg_w, bg_h, radius)
+                bg_center_x = center_x + bg_offset_x * size / 50
+                bg_center_y = center_y + bg_offset_y * size / 50
+                bg_left = bg_center_x - bg_w / 2
+                bg_top = bg_center_y - bg_h / 2
+                path = rounded_rect_ass_path_origin(bg_w, bg_h, radius)
                 bg_color = hex_to_ass_bgr(bg_color_hex)
                 ass += (
                     f"Dialogue: 0,{start_str},{end_str},Bg,,0,0,0,,"
-                    f"{{\\an5\\pos({round(center_x)},{round(center_y)})\\p1\\bord0\\shad0"
+                    f"{{\\an7\\pos({round(bg_left)},{round(bg_top)})\\p1\\bord0\\shad0"
                     f"\\1c&H{bg_color}&\\1a&H{bg_alpha:02X}&}}{path}\n"
                 )
 
-            ass += f"Dialogue: 1,{start_str},{end_str},Default,,0,0,0,,{text}\n"
+            horizontal = sub_pos % 3
+            for line_index, line in enumerate(lines):
+                line_width = min(estimate_ass_text_width(line, size, letter_spacing, font), max_text_width)
+                if horizontal == 1:
+                    line_x = center_x - text_w / 2 + line_width / 2
+                elif horizontal == 0:
+                    line_x = center_x + text_w / 2 - line_width / 2
+                else:
+                    line_x = center_x
+                line_y = center_y - text_h / 2 + line_h / 2 + line_index * line_h
+                ass += (
+                    f"Dialogue: 1,{start_str},{end_str},Default,,0,0,0,,"
+                    f"{{\\an5\\pos({round(line_x)},{round(line_y)})}}{line}\n"
+                )
 
     return ass
 
@@ -1343,7 +1558,6 @@ def process_dual_subtitles(downloads_dir, opts, update=None):
 
 def burn_subtitles_to_video(downloads_dir, ass_name, update=None):
     """Burn ASS subtitles into the video file using ffmpeg."""
-    import tempfile
     import shutil
 
     ass_path = downloads_dir / ass_name
@@ -1362,7 +1576,8 @@ def burn_subtitles_to_video(downloads_dir, ass_name, update=None):
 
     # Copy ASS to temp with simple name, use relative path to avoid
     # ffmpeg filter parsing issues with Windows drive letters / special chars
-    tmp_dir = Path(tempfile.gettempdir())
+    tmp_dir = DOWNLOADS_DIR / "_tmp" / f"sub_burn_{uuid.uuid4().hex[:8]}"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
     tmp_ass = tmp_dir / "_sub_burn.ass"
     try:
         shutil.copy2(str(ass_path), str(tmp_ass))
@@ -1399,7 +1614,7 @@ def burn_subtitles_to_video(downloads_dir, ass_name, update=None):
         if update:
             update("downloading", 99, f"Hardsub error: {e}")
     finally:
-        tmp_ass.unlink(missing_ok=True)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 # ── Local Video Subtitle Translation ─────────────────────────────────
@@ -1588,11 +1803,18 @@ def subtitle_entries_to_burn_segments(entries, sub_mode="zh_en"):
     return merged
 
 
-def burn_ass_to_output_video(video_path, ass_path, output_path, update=None):
-    tmp_dir = Path(tempfile.gettempdir()) / f"youtube_burn_{uuid.uuid4().hex[:8]}"
+def burn_ass_to_output_video(video_path, ass_path, output_path, update=None, font_name=None):
+    tmp_dir = DOWNLOADS_DIR / "_tmp" / f"youtube_burn_{uuid.uuid4().hex[:8]}"
     tmp_dir.mkdir(parents=True, exist_ok=True)
     tmp_ass = tmp_dir / "_translated_burn.ass"
     shutil.copy2(str(ass_path), str(tmp_ass))
+    vf_filter = "ass=_translated_burn.ass"
+    font_path = resolve_font_file(font_name) if font_name else None
+    if font_path:
+        fonts_dir = tmp_dir / "_fonts"
+        fonts_dir.mkdir(exist_ok=True)
+        shutil.copy2(str(font_path), str(fonts_dir / Path(font_path).name))
+        vf_filter = "ass=_translated_burn.ass:fontsdir=_fonts"
     try:
         if update:
             update(progress=70, message="正在烧录字幕到视频...")
@@ -1600,7 +1822,7 @@ def burn_ass_to_output_video(video_path, ass_path, output_path, update=None):
             [
                 "ffmpeg", "-y",
                 "-i", str(video_path),
-                "-vf", "ass=_translated_burn.ass",
+                "-vf", vf_filter,
                 "-c:a", "copy",
                 "-c:v", "libx264",
                 "-preset", "fast",
@@ -1623,25 +1845,49 @@ def burn_ass_to_output_video(video_path, ass_path, output_path, update=None):
 
 def run_burn_translated_video_task(task_id, opts):
     try:
-        local_task_update(task_id, status="running", progress=5, message="正在查找当前视频和翻译字幕...")
-        project_dir = resolve_burn_project_dir(opts.get("session_id", ""))
-        if not project_dir:
-            raise RuntimeError("没有找到同时包含视频和翻译字幕的项目，请先下载视频并导出/翻译字幕。")
-        video = find_project_source_video(project_dir)
-        subtitle = find_project_translated_subtitle(project_dir)
+        local_task_update(task_id, status="running", progress=5, message="正在查找当前视频和字幕...")
+        session_id = opts.get("session_id", "")
+        session = get_local_session(session_id) if session_id else None
+        entries = []
+        subtitle = None
+        subtitle_label = ""
+        project_dir = None
+        video = None
+
+        if session and session.get("entries"):
+            entries = [dict(entry) for entry in session.get("entries", [])]
+            if session.get("project_dir"):
+                project_dir = Path(session["project_dir"])
+            video = resolve_session_video_path(session)
+            subtitle_label = "当前工作台字幕"
+
+        if not entries:
+            project_dir = resolve_burn_project_dir(session_id)
+            if not project_dir:
+                raise RuntimeError("没有找到同时包含视频和字幕的项目，请先下载视频并读取/翻译字幕。")
+            video = find_project_source_video(project_dir)
+            subtitle = find_project_translated_subtitle(project_dir)
+            if not subtitle:
+                raise RuntimeError("当前项目没有找到可烧录的字幕，请先读取上传的 SRT，或导出/翻译字幕。")
+            subtitle_label = subtitle.name
+            srt_text = subtitle.read_text(encoding="utf-8", errors="replace")
+            entries = parse_srt_content(srt_text)
+
+        if not project_dir and session and session.get("project_dir"):
+            project_dir = Path(session["project_dir"])
+        if project_dir and not Path(project_dir).exists():
+            project_dir = None
         if not video:
             raise RuntimeError("当前项目没有找到可烧录的源视频。")
-        if not subtitle:
-            raise RuntimeError("当前项目没有找到翻译好的字幕，请先导出中文或双语 SRT。")
+        if not project_dir:
+            project_dir = Path(video).parent
 
         local_task_update(
             task_id,
             progress=20,
-            message=f"正在生成字幕样式：{subtitle.name}",
+            message=f"正在生成字幕样式：{subtitle_label}",
             project_dir=str(project_dir),
         )
-        srt_text = subtitle.read_text(encoding="utf-8", errors="replace")
-        entries = parse_srt_content(srt_text)
         if not entries:
             raise RuntimeError("翻译字幕无法解析，请确认是 SRT/VTT 字幕文件。")
         merged = subtitle_entries_to_burn_segments(entries, opts.get("sub_mode", "zh_en"))
@@ -1665,6 +1911,7 @@ def run_burn_translated_video_task(task_id, opts):
             video,
             ass_path,
             output_path,
+            font_name=ass_opts.get("font"),
             update=lambda **fields: local_task_update(task_id, **fields),
         )
         payload = file_download_payload(output_path)
@@ -1677,7 +1924,7 @@ def run_burn_translated_video_task(task_id, opts):
             url=payload.get("url"),
             download_label="下载翻译视频",
             video=str(video),
-            subtitle=str(subtitle),
+            subtitle=str(subtitle) if subtitle else subtitle_label,
             output=str(output_path),
             project_dir=str(project_dir),
         )
@@ -1697,7 +1944,7 @@ def serialize_local_entries(entries, limit=120):
     } for i, e in enumerate(visible)]
 
 
-def create_local_session(original_name, entries, project_dir=None, translation_dir=None, source_path=None):
+def create_local_session(original_name, entries, project_dir=None, translation_dir=None, source_path=None, translation_model=""):
     session_id = str(uuid.uuid4())[:8]
     for i, entry in enumerate(entries, 1):
         entry["index"] = i
@@ -1712,6 +1959,7 @@ def create_local_session(original_name, entries, project_dir=None, translation_d
             "source_path": str(source_path) if source_path else "",
             "reference_materials": "",
             "translation_reference": "",
+            "translation_model": translation_model or "",
             "created_at": time.time(),
         }
     return session_id
@@ -1740,6 +1988,7 @@ def local_session_payload(session, limit=120):
         "translation_dir": session.get("translation_dir", ""),
         "reference_materials": session.get("reference_materials", ""),
         "translation_reference": session.get("translation_reference", ""),
+        "translation_model": session.get("translation_model", ""),
         "entries": serialize_local_entries(entries, limit=limit),
     }
 
@@ -2238,25 +2487,48 @@ def subtitle_text_sample(entries, limit=240, max_chars=18000):
     return "\n".join(lines)[:max_chars]
 
 
-def build_translation_reference(entries, api_url, api_key, model, materials="", user_hint=""):
+def build_translation_reference(entries, api_url, api_key, model, materials="", user_hint="", entity_profile_boost=True):
     sample = subtitle_text_sample(entries)
     material_text = (materials or "").strip()[:20000]
     hint = (user_hint or "").strip()
-    prompt = f"""你是字幕翻译前的资料整理助手。请根据用户提供的资料、背景提示和字幕样本，整理一份给后续字幕校正与翻译使用的“翻译参考表”。
+    no_subtitle_mode = not bool(sample.strip())
+    task_mode = (
+        "当前没有字幕样本。请把用户输入的视频标题、链接、人物、公司、产品、主题或关键词当作检索线索，先为后续字幕翻译准备参考资料。"
+        if no_subtitle_mode
+        else "当前已有字幕样本。请结合字幕样本和用户资料，为后续字幕校正与翻译准备参考资料。"
+    )
+    entity_rules = ""
+    if entity_profile_boost:
+        entity_rules = """人物/专名背景增强：
+- 请重点识别并整理人名、公司名、产品名、AI 模型名、机构名、节目名、论文/项目名和缩写。
+- 如果可以联网，请优先搜索人物的职业身份、所在公司、职位、代表项目，以及他们在本视频主题中的相关背景。
+- 人名、公司名、产品名、模型名默认保留英文；不要强行音译。
+- 对每个关键人物尽量给出：英文名、身份/职位、相关公司/产品、翻译时需要注意的上下文。
+- 如果身份不确定，必须写入“待确认”，不要编造。"""
 
-如果当前模型/API 支持联网搜索，可以围绕资料里的链接、关键词、人物、公司、产品名和主题补充公开信息；如果不支持联网，不要假装搜索，只基于用户资料和字幕样本整理，并把需要人工补充的内容写到“待确认”里。
+    prompt = f"""你是字幕翻译前的资料研究与整理助手。你的目标不是翻译字幕，而是生成后续字幕翻译会用到的“翻译参考表”。
+
+任务模式：
+{task_mode}
+
+联网规则：
+- 如果当前模型/API 支持联网搜索，请围绕用户提供的链接、标题、关键词、人物、公司、产品名和主题检索公开信息，并把有把握的信息整理进参考表。
+- 如果当前模型/API 不支持联网搜索，不要假装已经搜索；只基于用户输入和已有知识整理，并在“建议搜索关键词”和“待确认”里列出需要用户或联网模型补充的信息。
+- 不要编造具体事实、职位、日期、融资金额、产品细节；不确定就写“待确认”。
+{entity_rules}
 
 输出要求：
 - 使用简体中文。
 - 不要翻译整段字幕，只整理参考。
-- 优先覆盖 AI、技术、投资、公司、人名、产品名、缩写词、专有名词。
-- 给出中英文术语对照、统一译法、ASR 易错词和翻译风格规则。
+- 优先覆盖 AI、技术、投资、公司、人名、产品名、模型名、缩写词、专有名词。
+- 专属名称、人名、公司名、产品名、模型名默认保留英文；必要时给中文解释，不强行音译。
+- 给出中英文术语对照、统一译法、ASR 易错词、翻译风格规则。
 - 内容要紧凑，适合每次翻译字幕时放进提示词。
 
-背景提示：
+用户输入/背景提示：
 {hint or "无"}
 
-用户资料/搜索材料：
+用户提供的参考资料、链接或关键词：
 {material_text or "无"}
 
 字幕样本：
@@ -2264,8 +2536,10 @@ def build_translation_reference(entries, api_url, api_key, model, materials="", 
 
 请按下面结构输出：
 ## 内容背景
+## 建议搜索关键词
+## 人物身份/职业背景（默认保留英文名）
+## 公司/产品/模型名（默认保留英文）
 ## 术语与统一译法
-## 人名/公司/产品
 ## ASR 易错词校正
 ## 翻译风格规则
 ## 待确认
@@ -2324,6 +2598,28 @@ def apply_asr_corrections(entries, corrections):
     return applied
 
 
+CHARACTER_CN_NAME_RULE = """知名角色名中英对照规则：
+- 仅针对影视、动画、文学、游戏等作品中的知名角色名；真人姓名、公司名、产品名、模型名和机构名仍按专名规则处理。
+- 翻译中文字幕时，遇到有通用中文译名的知名角色名，保留英文原名，并在后面加括号写通用中文译名，例如 Nemo（尼莫）、Dory（多莉）、Woody（胡迪）、Bambi（小鹿斑比）、Michael Corleone（迈克尔·柯里昂）。
+- 如果背景提示或翻译参考表提供了统一译法，优先使用参考资料；如果不确定通用中文译名，不要编造，只保留英文原名。
+- 不要把已经是中文作品名或普通人名的内容强行改成角色中英对照。"""
+
+
+def truthy_value(value):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def build_translation_prompt_hint(user_hint="", character_cn_names=False):
+    hint = (user_hint or "").strip()
+    if truthy_value(character_cn_names) and "知名角色名中英对照规则" not in hint:
+        hint = f"{hint}\n\n{CHARACTER_CN_NAME_RULE}" if hint else CHARACTER_CN_NAME_RULE
+    return hint
+
+
 def translate_local_entries(task_id, entries, api_url, api_key, model, user_hint=""):
     batch_size = 60
     total_batches = max(1, (len(entries) + batch_size - 1) // batch_size)
@@ -2343,6 +2639,9 @@ def translate_local_entries(task_id, entries, api_url, api_key, model, user_hint
 请逐行完成两件事：
 1. 轻微修正明显的英文 ASR 错词，不要改写风格，不要合并或拆分字幕。
 2. 翻译为自然、简洁的简体中文，适合视频字幕。
+3. 人名、公司名、产品名、模型名、机构名、节目名、论文/项目名和缩写默认保留英文；不要强行音译。
+4. 如果背景提示或翻译参考表提供了人物身份、职业背景、公司职位或产品背景，翻译时用这些信息理解上下文；必要时可在中文中简短补充身份，但不要添加英文没有的信息。
+5. 对不确定的人名或术语，保留英文，不要编造身份。
 
 背景提示：
 {hint or "无"}
@@ -2396,6 +2695,8 @@ def translate_compare_entries(task_id, entries, api_url, api_key, model, user_hi
         lines = "\n".join(f"{e['index']} | {e['source'].replace(chr(10), ' ')}" for e in batch)
         prompt = f"""你是专业英文到简体中文字幕翻译助手。请把下面字幕逐行翻译成自然、简洁的中文，保留 AI、公司、产品和人名术语准确。
 不要修改英文原文，不要合并或拆分字幕。
+人名、公司名、产品名、模型名、机构名、节目名、论文/项目名和缩写默认保留英文，不要强行音译。
+如果背景提示或翻译参考表提供了人物身份、职业背景、公司职位或产品背景，翻译时用这些信息理解上下文；不确定就保留英文，不要编造身份。
 
 背景提示：
 {hint or "无"}
@@ -2875,20 +3176,24 @@ def run_local_subtitle_task(task_id, media_path, original_name, opts):
                 original_name,
             )
 
+        prompt_hint = build_translation_prompt_hint(
+            opts.get("prompt", ""),
+            opts.get("character_cn_names"),
+        )
         local_task_update(task_id, progress=58, message="正在用大模型分析识别错误...")
         corrections = analyze_asr_corrections(
-            entries, api_url, api_key, model, opts.get("prompt", "")
+            entries, api_url, api_key, model, prompt_hint
         )
         applied = apply_asr_corrections(entries, corrections)
 
-        translate_local_entries(task_id, entries, api_url, api_key, model, opts.get("prompt", ""))
+        translate_local_entries(task_id, entries, api_url, api_key, model, prompt_hint)
         if opts.get("compare_enabled"):
             cmp_api_url = opts.get("compare_api_url", "").strip()
             cmp_api_key = opts.get("compare_api_key", "").strip()
             cmp_model = opts.get("compare_model", "").strip()
             if not cmp_api_url or not cmp_api_key or not cmp_model:
                 raise RuntimeError("已开启对比翻译，请填写对比翻译 API 地址、Key 和模型名。")
-            translate_compare_entries(task_id, entries, cmp_api_url, cmp_api_key, cmp_model, opts.get("prompt", ""))
+            translate_compare_entries(task_id, entries, cmp_api_url, cmp_api_key, cmp_model, prompt_hint)
 
         local_task_update(task_id, progress=94, message="正在导出字幕文件...")
         output_mode = opts.get("output_mode", "bilingual")
@@ -2907,6 +3212,7 @@ def run_local_subtitle_task(task_id, media_path, original_name, opts):
                 order=order,
             )
         else:
+            order = "zh_top"
             output_text = entries_to_srt(entries, bilingual=bilingual, order=order)
         stem = local_media_output_stem(original_name, "local_video")
         output_name = subtitle_output_filename(stem, output_mode, order=order, context=opts)
@@ -2921,6 +3227,7 @@ def run_local_subtitle_task(task_id, media_path, original_name, opts):
             "source_path": opts.get("source_path") or media_path,
             "reference_materials": opts.get("reference_materials", ""),
             "translation_reference": opts.get("translation_reference", ""),
+            "translation_model": model,
         }
         save_session_translation_artifacts(session, stem)
         session_id = create_local_session(
@@ -2929,6 +3236,7 @@ def run_local_subtitle_task(task_id, media_path, original_name, opts):
             project_dir=project_dir,
             translation_dir=translation_dir,
             source_path=opts.get("source_path") or media_path,
+            translation_model=model,
         )
         set_session_translation_reference(
             session_id,
@@ -2941,7 +3249,8 @@ def run_local_subtitle_task(task_id, media_path, original_name, opts):
             status="completed",
             progress=100,
             message=f"完成：{len(entries)} 条字幕，合并 {merged_count} 处，智能分段 {split_count} 处，应用 {applied} 处校正",
-            **file_download_payload(output_path, prefer_zip=True),
+            **file_download_payload(output_path),
+            download_label="下载字幕",
             corrections=corrections,
             segments=len(entries),
             session_id=session_id,
@@ -3015,17 +3324,22 @@ def run_local_translate_task(task_id, session_id, opts):
             opts.get("translation_reference", ""),
             opts.get("reference_materials", ""),
         )
-        translate_local_entries(task_id, entries, api_url, api_key, model, opts.get("prompt", ""))
+        prompt_hint = build_translation_prompt_hint(
+            opts.get("prompt", ""),
+            opts.get("character_cn_names"),
+        )
+        translate_local_entries(task_id, entries, api_url, api_key, model, prompt_hint)
         if opts.get("compare_enabled"):
             cmp_api_url = opts.get("compare_api_url", "").strip()
             cmp_api_key = opts.get("compare_api_key", "").strip()
             cmp_model = opts.get("compare_model", "").strip()
             if not cmp_api_url or not cmp_api_key or not cmp_model:
                 raise RuntimeError("已开启对比翻译，请填写对比翻译 API 地址、Key 和模型名。")
-            translate_compare_entries(task_id, entries, cmp_api_url, cmp_api_key, cmp_model, opts.get("prompt", ""))
+            translate_compare_entries(task_id, entries, cmp_api_url, cmp_api_key, cmp_model, prompt_hint)
         with local_subtitle_lock:
             if session_id in local_subtitle_sessions:
                 local_subtitle_sessions[session_id]["entries"] = entries
+                local_subtitle_sessions[session_id]["translation_model"] = model
                 session = local_subtitle_sessions[session_id]
         save_session_translation_artifacts(session, local_media_output_stem(session.get("name"), "subtitle"))
         local_task_update(
@@ -4165,32 +4479,40 @@ def get_local_subtitle_session(session_id):
 def build_local_translation_reference():
     data = request.json or {}
     session = get_local_session(data.get("session_id", ""))
-    if not session:
-        return jsonify({"error": "字幕会话不存在，请先读取字幕"}), 404
 
     api_url = data.get("api_url", "").strip()
     api_key = data.get("api_key", "").strip()
     model = data.get("model", "").strip()
     if not api_url or not api_key or not model:
         return jsonify({"error": "请先填写 AI 设置里的 API 地址、Key 和模型"}), 400
+    if not session and not (data.get("reference_materials", "").strip() or data.get("prompt", "").strip()):
+        return jsonify({"error": "没有读取字幕时，请先填写视频标题、主题、人物、链接或关键词"}), 400
 
     try:
         reference = build_translation_reference(
-            session["entries"],
+            session["entries"] if session else [],
             api_url,
             api_key,
             model,
             materials=data.get("reference_materials", ""),
             user_hint=data.get("prompt", ""),
+            entity_profile_boost=bool(data.get("entity_profile_boost", True)),
         )
-        output_path = set_session_translation_reference(
-            session["id"],
-            reference,
-            data.get("reference_materials", ""),
-        )
-        payload = local_session_payload(get_local_session(session["id"]))
-        if output_path:
-            payload["reference_file"] = str(output_path.relative_to(DOWNLOADS_DIR)).replace("\\", "/")
+        if session:
+            output_path = set_session_translation_reference(
+                session["id"],
+                reference,
+                data.get("reference_materials", ""),
+            )
+            payload = local_session_payload(get_local_session(session["id"]))
+            if output_path:
+                payload["reference_file"] = str(output_path.relative_to(DOWNLOADS_DIR)).replace("\\", "/")
+        else:
+            payload = {
+                "translation_reference": reference,
+                "reference_materials": data.get("reference_materials", ""),
+                "research_only": True,
+            }
         return jsonify(payload)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -4209,6 +4531,32 @@ def pick_local_path():
         return jsonify({"path": selected, "kind": kind})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/open-download-directory", methods=["POST"])
+def open_download_directory():
+    data = request.json or {}
+    target = None
+    explicit_path = (data.get("path") or "").strip()
+    if explicit_path:
+        target = resolve_download_directory_candidate(explicit_path)
+        if not target:
+            return jsonify({"error": "只能打开 downloads 目录下已存在的文件夹"}), 400
+    else:
+        session = get_local_session(data.get("session_id", ""))
+        if session:
+            for key in ("translation_dir", "project_dir"):
+                target = resolve_download_directory_candidate(session.get(key, ""))
+                if target:
+                    break
+        if not target:
+            target = DOWNLOADS_DIR.resolve()
+
+    try:
+        open_directory_with_system_manager(target)
+        return jsonify({"ok": True, "path": str(target)})
+    except Exception as e:
+        return jsonify({"error": f"打开目录失败: {e}"}), 500
 
 
 @app.route("/api/local-subtitle/clip-source", methods=["POST"])
@@ -4398,6 +4746,7 @@ def translate_local_subtitle_session():
         "prompt": data.get("prompt", ""),
         "reference_materials": data.get("reference_materials", ""),
         "translation_reference": data.get("translation_reference", ""),
+        "character_cn_names": truthy_value(data.get("character_cn_names", False)),
         "compare_enabled": bool(data.get("compare_enabled", False)),
         "compare_api_url": data.get("compare_api_url", ""),
         "compare_api_key": data.get("compare_api_key", ""),
@@ -4428,6 +4777,7 @@ def export_local_subtitle():
         export_entries = [{**e, "source": e.get("translation", ""), "translation": ""} for e in session["entries"]]
         output_text = entries_to_srt(export_entries, bilingual=False, order=order)
     else:
+        order = "zh_top"
         output_text = entries_to_srt(session["entries"], bilingual=bilingual, order=order)
     if not output_text.strip():
         return jsonify({"error": "没有可导出的字幕内容"}), 400
@@ -4438,7 +4788,9 @@ def export_local_subtitle():
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / output_name
     output_path.write_text(output_text, encoding="utf-8")
-    return jsonify(file_download_payload(output_path, prefer_zip=True))
+    payload = file_download_payload(output_path)
+    payload["download_label"] = "下载字幕"
+    return jsonify(payload)
 
 
 @app.route("/api/burn-translated-video", methods=["POST"])
@@ -4455,6 +4807,8 @@ def burn_translated_video():
         "sub_order": data.get("sub_order", "zh_top"),
         "sub_pos": clamp_int(data.get("sub_pos", 2), 1, 9, 2),
         "margin_v": clamp_int(data.get("margin_v", 30), 0, 1000, 30),
+        "letter_spacing": clamp_int(data.get("letter_spacing", 0), -20, 100, 0),
+        "line_spacing": clamp_int(data.get("line_spacing", 0), -80, 200, 0),
         "bg_enabled": bool(data.get("bg_enabled", True)),
         "bg_color": data.get("bg_color", "#000000"),
         "bg_opacity": clamp_int(data.get("bg_opacity", 50), 0, 100, 50),
@@ -4576,6 +4930,7 @@ def start_local_subtitle():
         "prompt": request.form.get("prompt", ""),
         "reference_materials": request.form.get("reference_materials", ""),
         "translation_reference": request.form.get("translation_reference", ""),
+        "character_cn_names": truthy_value(request.form.get("character_cn_names")),
         "compare_enabled": request.form.get("compare_enabled") == "1",
         "compare_api_url": request.form.get("compare_api_url", ""),
         "compare_api_key": request.form.get("compare_api_key", ""),
@@ -4739,6 +5094,8 @@ def start_download():
             "sub_order": data.get("sub_order", "zh_top"),
             "sub_pos": int(data.get("sub_pos", 2)),
             "margin_v": int(data.get("margin_v", 30)),
+            "letter_spacing": int(data.get("letter_spacing", 0)),
+            "line_spacing": int(data.get("line_spacing", 0)),
             "bg_enabled": data.get("bg_enabled", False),
             "bg_color": data.get("bg_color", "#000000"),
             "bg_opacity": int(data.get("bg_opacity", 50)),

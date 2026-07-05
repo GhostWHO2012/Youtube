@@ -90,7 +90,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .bg-row .bg-val{min-width:36px;text-align:right;font-size:11px}
 .bg-row .bg-num{width:38px;padding:2px 3px;font-size:11px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);text-align:center;outline:none;-moz-appearance:textfield;flex-shrink:0}
 .bg-row .bg-num::-webkit-inner-spin-button,.bg-row .bg-num::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
-#subSize::-webkit-inner-spin-button,#subSize::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+#subSize::-webkit-inner-spin-button,#subSize::-webkit-outer-spin-button,#letterSpacing::-webkit-inner-spin-button,#letterSpacing::-webkit-outer-spin-button,#lineSpacing::-webkit-inner-spin-button,#lineSpacing::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
 .bg-row .bg-num:focus{border-color:var(--accent)}
 .bg-row .bg-pct{font-size:11px;color:var(--text2);flex-shrink:0}
 .bg-row input[type="color"]{width:28px;height:28px;border:1px solid var(--border);border-radius:6px;background:none;cursor:pointer;padding:2px;flex-shrink:0}
@@ -118,7 +118,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 @media(max-width:900px){.reference-grid{grid-template-columns:1fr}}
 .local-sub-status{margin-top:12px}
 .local-sub-status .progress-msg{margin-top:8px;text-align:left}
-#localSubDownload{display:inline-block;margin-top:8px}
+#localSubDownload,#localOpenDir{display:inline-block;margin-top:8px}
 .local-workbench-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:12px}
 .local-workbench-actions select{padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;outline:none}
 .local-preview{margin-top:12px;border:1px solid var(--border);border-radius:8px;overflow:hidden;max-height:360px;overflow-y:auto;background:var(--bg)}
@@ -253,6 +253,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
         <button class="btn btn-secondary" id="fmtBtn" onclick="queryFormats()" title="查询当前链接可用的视频、音频和合并格式，适合手动选择清晰度。">查看格式</button>
         <button class="btn btn-secondary" id="thumbBtn" onclick="downloadThumbnail()" title="只下载当前视频封面，不下载视频或音频；保存为 JPEG。">封面</button>
         <button class="btn btn-primary" id="dlBtn" onclick="startDownload()" title="按上方勾选内容下载视频、音频、封面、原始简介、翻译后简介和链接标题。">下载</button>
+        <button class="btn btn-secondary" onclick="openDownloadDirectory()" title="用资源管理器打开 downloads 下载目录。">打开目录</button>
     </div>
 
     <div class="opt-row">
@@ -263,7 +264,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
           <label class="check-pill"><input type="checkbox" id="downloadAudio" onchange="toggleType()" checked>音频</label>
           <label class="check-pill" title="下载视频封面，并统一转换为 JPEG。"><input type="checkbox" id="downloadCover" checked>封面</label>
           <label class="check-pill"><input type="checkbox" id="downloadDescription" checked>简介</label>
-          <label class="check-pill" title="调用下方翻译/简介 API，生成可直接粘贴到 B站的中文简介，保存到项目 04_简介。"><input type="checkbox" id="downloadTranslatedDescription">翻译后简介</label>
+          <label class="check-pill" title="调用下方翻译/简介 API，生成标题翻译、中英文对照、翻译理由和可直接粘贴到 B站的中文简介，保存到项目 04_简介。"><input type="checkbox" id="downloadTranslatedDescription">翻译后简介</label>
           <label class="check-pill"><input type="checkbox" id="downloadLinkTitle" checked>链接标题</label>
         </div>
       </div>
@@ -375,6 +376,14 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
             <label>字号</label>
             <input type="number" id="subSize" value="52" min="16" max="200" step="1" onchange="updateSubPreview()" oninput="updateSubPreview()" list="subSizePresets" style="width:68px;padding:6px 8px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;outline:none;-moz-appearance:textfield" onfocus="this.select()"><datalist id="subSizePresets"><option value="28"><option value="36"><option value="44"><option value="52"><option value="60"><option value="72"><option value="84"><option value="96"></datalist>
           </div>
+          <div class="opt-group">
+            <label>字间距</label>
+            <input type="number" id="letterSpacing" value="0" min="-20" max="100" step="1" onchange="updateSubPreview()" oninput="updateSubPreview()" title="字幕文字之间的间距，单位像素；正数拉开，负数收紧。" style="width:68px;padding:6px 8px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;outline:none;-moz-appearance:textfield" onfocus="this.select()">
+          </div>
+          <div class="opt-group">
+            <label>行间距</label>
+            <input type="number" id="lineSpacing" value="0" min="-80" max="200" step="1" onchange="updateSubPreview()" oninput="updateSubPreview()" title="多行字幕之间的额外间距，单位像素；正数加大行距，负数收紧。" style="width:68px;padding:6px 8px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;outline:none;-moz-appearance:textfield" onfocus="this.select()">
+          </div>
           <div class="opt-group"><div class="color-row"><label>字幕颜色</label><input type="color" id="subColor" value="#ffffff" oninput="updateSubPreview()"></div></div>
           <div class="opt-group"><div class="color-row"><label>描边颜色</label><input type="color" id="outlineColor" value="#000000" oninput="updateSubPreview()"></div></div>
           <div class="full bg-section">
@@ -416,8 +425,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
             <div class="hint" style="margin-top:6px">烧录时会使用自动贴合的稳定背景，优先保证字幕和背景对齐。</div>
           </div>
           <div class="opt-group full">
-            <button class="btn btn-primary" id="burnTranslatedBtn" onclick="burnTranslatedVideo()" title="把当前下载的视频和当前翻译好的字幕烧录成一个翻译视频，不覆盖源视频。">烧录翻译视频</button>
-            <span style="font-size:11px;color:var(--text2);margin-left:8px">使用当前下载视频 + 当前翻译字幕，输出到项目的 30_烧录</span>
+            <button class="btn btn-primary" id="burnTranslatedBtn" onclick="burnTranslatedVideo()" title="优先使用当前在线字幕工作台里上传/翻译好的字幕；没有当前会话时，才使用项目里最新导出的翻译字幕。">烧录翻译视频</button>
+            <span style="font-size:11px;color:var(--text2);margin-left:8px">优先使用图2预览里的当前字幕 + 当前项目源视频，输出到项目的 30_烧录</span>
           </div>
           <div class="opt-group full">
             <label>自动翻译中文</label>
@@ -449,7 +458,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
           <div style="font-size:10px;color:var(--text2);text-align:center;margin-top:4px" id="marginVLabel">边距: 30px</div>
         </div>
       </div>
-      <div class="hint">拖拽预览区字幕调整垂直位置，也可以直接输入位置参数和边距。点击「烧录翻译视频」会把当前下载视频和当前翻译字幕嵌入成品视频。</div>
+      <div class="hint">拖拽预览区字幕调整垂直位置，也可以直接输入位置参数和边距。点击「烧录翻译视频」会优先把当前工作台预览里的字幕嵌入成品视频；没有当前字幕会话时，才回退到项目里最新导出的字幕文件。</div>
     </div>
   </div>
 
@@ -491,12 +500,26 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
       <div class="reference-head">
         <div class="reference-title">翻译参考资料</div>
         <div class="reference-actions">
-          <button class="btn btn-secondary" id="buildReferenceBtn" onclick="buildTranslationReference()" title="读取当前字幕样本和左侧资料，整理成术语表、背景、ASR 易错词和翻译规则。普通 API 不会自动联网；支持联网的模型可按资料中的关键词补充。">整理参考</button>
+          <button class="btn btn-secondary" id="buildReferenceBtn" onclick="buildTranslationReference()" title="有字幕时会结合字幕整理；无字幕时会根据你输入的视频标题、链接、人物、公司、产品或关键词，让支持联网的模型搜索相关资料并生成翻译参考。普通 API 不会自动联网。">整理参考</button>
           <button class="btn btn-secondary" onclick="clearTranslationReference()" title="清空当前参考资料和整理结果，本次检查与翻译不再使用它们。">清空参考</button>
         </div>
       </div>
+      <div class="opt-row" style="margin-bottom:10px;gap:10px">
+        <div class="opt-group" style="min-width:190px">
+          <label>人物/专名背景增强</label>
+          <label class="toggle"><input type="checkbox" id="entityProfileBoost" checked><span class="slider"></span></label>
+        </div>
+        <div class="hint" style="margin:0;flex:1">开启后，整理参考会重点补充人名、公司、产品、模型名和职业身份；翻译时默认保留这些专名英文，并用身份背景理解上下文。</div>
+      </div>
+      <div class="opt-row" style="margin-bottom:10px;gap:10px">
+        <div class="opt-group" style="min-width:190px">
+          <label>角色名中英对照</label>
+          <label class="toggle"><input type="checkbox" id="characterCnNameToggle"><span class="slider"></span></label>
+        </div>
+        <div class="hint" style="margin:0;flex:1">开启后，翻译中文字幕时，知名影视/文学/游戏角色名保留英文，并在后面加通用中文译名，例如 Nemo（尼莫）；不确定时只保留英文。</div>
+      </div>
       <div class="reference-grid">
-        <textarea id="translationReferenceMaterials" placeholder="粘贴参考资料、搜索结果、网页摘要、人物/公司/产品说明、术语表或关键词..."></textarea>
+        <textarea id="translationReferenceMaterials" placeholder="可粘贴视频标题、链接、人物、公司、产品、关键词、参考资料、搜索结果或网页摘要；没有字幕时会用这些内容让 AI 搜索/整理参考..."></textarea>
         <textarea id="translationReferenceGuide" placeholder="整理后的翻译参考会显示在这里，可手动修改；AI 检查单词和翻译会自动使用这份内容。"></textarea>
       </div>
       <div class="reference-status" id="translationReferenceStatus">参考表会保存到当前项目的 10_翻译/translation_reference.md。</div>
@@ -528,15 +551,15 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
       <button class="btn btn-secondary" onclick="clearLocalTranslations()" title="只清空当前会话里的中文字幕和对比译文，保留识别/校正后的英文；不会删除已经导出的字幕文件。">清除翻译</button>
       <select id="localSubOrder" title="双语顺序">
         <option value="zh_top" selected>中文在上</option>
-        <option value="en_top">英文在上</option>
       </select>
-      <button class="btn btn-primary" onclick="exportLocalSubtitle()" title="按当前导出格式和双语顺序，导出英文、中文或双语 SRT。">导出字幕</button>
-      <button class="btn btn-secondary" id="localOneclickBtn" onclick="startLocalSubtitle()" title="自动完成：识别音视频、保存 raw_en、合并短句、智能分段、AI 检查单词、应用校正、翻译中文、导出所选字幕。">一键生成</button>
+      <button class="btn btn-primary" onclick="exportLocalSubtitle()" title="导出所选格式；双语字幕固定中文在上，直接下载 SRT，不生成 ZIP。">导出字幕</button>
+      <button class="btn btn-secondary" id="localOneclickBtn" onclick="startLocalSubtitle()" title="自动完成：识别音视频、保存英文版、合并短句、智能分段、AI 检查单词、应用校正、翻译中文，并输出英文版、中文版、中文在上的双语版。">一键生成</button>
     </div>
     <div class="local-sub-status" id="localSubStatus" style="display:none">
       <div class="progress-bar-bg"><div class="progress-bar-fill" id="localSubFill"></div></div>
       <div class="progress-msg" id="localSubMsg">准备中...</div>
       <a class="btn-sm" id="localSubDownload" href="#" style="display:none" title="下载刚刚导出的字幕文件。">下载字幕</a>
+      <button class="btn-sm" id="localOpenDir" onclick="openDownloadDirectory(localSessionId)" title="打开当前视频项目的翻译/下载目录。">打开当前目录</button>
     </div>
     <div class="clip-tools">
       <div class="clip-tools-head">
@@ -567,7 +590,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
     </div>
     <div class="local-suggestions" id="localSuggestions" style="display:none"></div>
     <div class="local-preview" id="localPreview"><div class="empty">先选择本地视频、音频或 SRT 文件</div></div>
-    <div class="hint">读取本地音频/视频/SRT 后，会按项目标题保存到 downloads/projects/视频标题。音视频只使用在线识别 API 生成 raw_en，再把 split_en、corrected_en、zh、双语字幕放进 10_翻译。“一键生成”会自动执行在线识别、合并短句、智能分段、AI 检查、应用校正、翻译和导出。</div>
+    <div class="hint">读取本地音频/视频/SRT 后，会按项目标题保存到 downloads/projects/视频标题。音视频只使用在线识别 API 生成英文字幕；翻译后只输出英文版、中文版、中文在上的双语版，文件名会标注使用的翻译模型，不再生成字幕 ZIP。</div>
   </div>
 
   <!-- Cross Review -->
@@ -655,11 +678,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
           <span style="font-size:13px;font-weight:600;color:var(--text2)">生成简介</span>
           <input type="text" id="targetUrl" style="flex:1;padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;outline:none" placeholder="目标视频链接（默认使用上方链接）">
-          <button class="btn btn-primary" style="padding:5px 12px;font-size:12px" id="genDescBtn" onclick="generateDesc()" title="使用翻译/简介 API 生成视频简介，可选择包含时间轴和 B 站格式。">生成</button>
+          <button class="btn btn-primary" style="padding:5px 12px;font-size:12px" id="genDescBtn" onclick="generateDesc()" title="使用翻译/简介 API 生成标题翻译、中英文对照、翻译理由和视频简介，可选择包含时间轴和 B 站格式。">生成</button>
           <label style="font-size:12px;color:var(--text2);display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="includeTimeline" checked> 包含时间轴</label>
           <label style="font-size:12px;color:var(--text2);display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="bilibiliFmt"> B站格式</label>
         </div>
-        <textarea id="generatedDesc" rows="8" style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;resize:vertical;outline:none;font-family:inherit" placeholder="AI 生成的简介将显示在这里..." readonly></textarea>
+        <textarea id="generatedDesc" rows="8" style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;resize:vertical;outline:none;font-family:inherit" placeholder="AI 生成的标题翻译、中英文对照、翻译理由和简介将显示在这里..." readonly></textarea>
         <div style="margin-top:6px;display:flex;justify-content:flex-end;gap:6px">
           <button class="btn-sm" id="saveDescBtn" style="display:none" onclick="saveGeneratedDesc()" title="确认简介文件已经保存到项目目录。">保存文件</button>
           <button class="btn-sm" id="copyDescBtn" style="display:none" onclick="copyGeneratedDesc()" title="复制生成的简介文本到剪贴板。">复制</button>
@@ -755,6 +778,8 @@ let marginV = 30;
 function updateSubPreview(){
   const font = document.getElementById('subFont').value;
   const size = document.getElementById('subSize').value;
+  const letterSpacing = parseFloat(document.getElementById('letterSpacing').value || '0');
+  const lineSpacing = parseFloat(document.getElementById('lineSpacing').value || '0');
   const color = document.getElementById('subColor').value;
   const outlineColor = document.getElementById('outlineColor').value;
   const subOrder = document.getElementById('subOrder').value;
@@ -775,6 +800,8 @@ function updateSubPreview(){
 
   const scale = preview.parentElement ? preview.parentElement.offsetHeight / 1080 : 0.15;
   const pxSize = Math.round(size * Math.max(scale, 0.15));
+  const pxLetterSpacing = letterSpacing * Math.max(scale, 0.15);
+  const pxLineHeight = Math.max(pxSize * 0.75, pxSize * 1.18 + lineSpacing * Math.max(scale, 0.15));
 
   if(subOrder === 'en_top'){
     line1.textContent = 'English subtitle';
@@ -786,9 +813,13 @@ function updateSubPreview(){
   line1.style.fontFamily = `"${font}", sans-serif`;
   line1.style.fontSize = pxSize + 'px';
   line1.style.color = color;
+  line1.style.letterSpacing = pxLetterSpacing + 'px';
+  line1.style.lineHeight = pxLineHeight + 'px';
   line2.style.fontFamily = `"${font}", sans-serif`;
   line2.style.fontSize = pxSize + 'px';
   line2.style.color = color;
+  line2.style.letterSpacing = pxLetterSpacing + 'px';
+  line2.style.lineHeight = pxLineHeight + 'px';
   line2.style.display = isBilingual ? '' : 'none';
   preview.style.textShadow = `2px 2px 3px ${outlineColor}, -1px -1px 2px ${outlineColor}, 1px -1px 2px ${outlineColor}, -1px 1px 2px ${outlineColor}`;
 
@@ -805,9 +836,11 @@ function updateSubPreview(){
       cx.font = `${pxSize}px "${font}", sans-serif`;
       const lw1 = cx.measureText(line1.textContent).width;
       const lw2 = isBilingual ? cx.measureText(line2.textContent).width : 0;
-      const maxW = Math.max(lw1, lw2);
+      const spacingW1 = Math.max(0, line1.textContent.length - 1) * pxLetterSpacing;
+      const spacingW2 = isBilingual ? Math.max(0, line2.textContent.length - 1) * pxLetterSpacing : 0;
+      const maxW = Math.max(lw1 + spacingW1, lw2 + spacingW2);
       const nLines = isBilingual ? 2 : 1;
-      const lineH = pxSize * 1.2;
+      const lineH = pxLineHeight;
       const totalH = nLines * lineH;
 
       // Match backend: padx = max(max_w * bg_width_pct/200, size*0.3) + outline_val
@@ -972,6 +1005,23 @@ function showToast(msg){
   const t = document.getElementById('toast');
   t.textContent = msg; t.classList.add('show');
   setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+async function openDownloadDirectory(sessionId){
+  const body = {};
+  if(sessionId) body.session_id = sessionId;
+  try{
+    const res = await fetch('/api/open-download-directory', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    if(data.error) throw new Error(data.error);
+    showToast('已打开目录');
+  }catch(e){
+    showToast('打开目录失败: ' + e.message);
+  }
 }
 
 // ── Format Query ─────────────────────────────────────────────────
@@ -1192,6 +1242,8 @@ function collectSubtitleUiSettings(){
     margin_v: marginV,
     font: document.getElementById('subFont').value,
     size: document.getElementById('subSize').value,
+    letter_spacing: document.getElementById('letterSpacing').value,
+    line_spacing: document.getElementById('lineSpacing').value,
     color: document.getElementById('subColor').value,
     outline_color: document.getElementById('outlineColor').value,
     bg_enabled: document.getElementById('bgEnabled').checked,
@@ -1342,7 +1394,24 @@ function getLocalAiSettings(){
   const rawPrompt = document.getElementById('localSubPrompt').value.trim();
   const reference_materials = document.getElementById('translationReferenceMaterials').value.trim();
   const translation_reference = document.getElementById('translationReferenceGuide').value.trim();
+  const entity_profile_boost = document.getElementById('entityProfileBoost')?.checked !== false;
+  const character_cn_names = document.getElementById('characterCnNameToggle')?.checked === true;
   const promptParts = [];
+  if(entity_profile_boost){
+    promptParts.push(`人物/专名背景增强规则：
+- 翻译前优先识别英文中的人名、公司名、产品名、模型名、机构名、节目名、论文/项目名和缩写。
+- 这些专属名称默认保留英文，不强行音译；必要时可用中文补充身份或职业背景。
+- 如果参考资料中有人物身份、职业背景、公司职位或产品背景，翻译时必须用这些信息消歧。
+- 不要把 Daniela Amodei、Dario Amodei、Anthropic、Claude、OpenAI、GPT、AI agents 等专名翻成中文名。
+- 遇到不确定的人名或术语，不要编造身份；保留英文并在参考整理的“待确认”中标出。`);
+  }
+  if(character_cn_names){
+    promptParts.push(`知名角色名中英对照规则：
+- 仅针对影视、动画、文学、游戏等作品中的知名角色名；真人姓名、公司名、产品名、模型名和机构名仍按专名规则处理。
+- 翻译中文字幕时，遇到有通用中文译名的知名角色名，保留英文原名，并在后面加括号写通用中文译名，例如 Nemo（尼莫）、Dory（多莉）、Woody（胡迪）、Bambi（小鹿斑比）、Michael Corleone（迈克尔·柯里昂）。
+- 如果参考资料给出了统一译法，优先使用参考资料；如果不确定通用中文译名，不要编造，只保留英文原名。
+- 不要把已经是中文作品名或普通人名的内容强行改成角色中英对照。`);
+  }
   if(rawPrompt) promptParts.push(`视频背景/术语提示：\n${rawPrompt}`);
   if(translation_reference){
     promptParts.push(`翻译参考表（必须优先遵守）：\n${translation_reference}`);
@@ -1356,37 +1425,43 @@ function getLocalAiSettings(){
     prompt: promptParts.join('\n\n'),
     raw_prompt: rawPrompt,
     reference_materials,
-    translation_reference
+    translation_reference,
+    entity_profile_boost,
+    character_cn_names
   };
 }
 
 async function buildTranslationReference(){
-  if(!localSessionId){ showToast('请先读取字幕，再整理翻译参考'); return; }
   let cfg;
   try{ cfg = getLocalAiSettings(); }catch(e){ showToast(e.message); return; }
+  if(!localSessionId && !cfg.raw_prompt && !cfg.reference_materials){
+    showToast('请先输入视频标题、主题、人物、链接或关键词，再让 AI 搜索/整理参考');
+    return;
+  }
   const btn = document.getElementById('buildReferenceBtn');
   const status = document.getElementById('translationReferenceStatus');
   btn.disabled = true;
-  btn.textContent = '整理中...';
-  setLocalStatus(20, '正在整理翻译参考资料...');
+  btn.textContent = localSessionId ? '整理中...' : '搜索中...';
+  setLocalStatus(20, localSessionId ? '正在整理翻译参考资料...' : '正在根据输入搜索/整理翻译参考...');
   try{
     const res = await fetch('/api/local-subtitle/reference', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({
-        session_id: localSessionId,
+        session_id: localSessionId || '',
         api_url: cfg.api_url,
         api_key: cfg.api_key,
         model: cfg.model,
         prompt: cfg.raw_prompt,
-        reference_materials: cfg.reference_materials
+        reference_materials: cfg.reference_materials,
+        entity_profile_boost: cfg.entity_profile_boost
       })
     });
     const data = await res.json();
     if(data.error) throw new Error(data.error);
     document.getElementById('translationReferenceGuide').value = data.translation_reference || '';
     if(data.reference_materials) document.getElementById('translationReferenceMaterials').value = data.reference_materials;
-    status.textContent = data.reference_file ? `已保存：${data.reference_file}` : '翻译参考资料已整理。';
+    status.textContent = data.reference_file ? `已保存：${data.reference_file}` : '翻译参考资料已整理，可在右侧手动调整。';
     setLocalStatus(100, '翻译参考资料已整理');
     showToast('翻译参考已整理');
   }catch(e){
@@ -1538,8 +1613,8 @@ async function pollLocalTask(taskId, done){
           }
           if(d.url || d.zip_url){
             const link = document.getElementById('localSubDownload');
-            link.href = d.zip_url || d.url;
-            link.textContent = d.download_label || (d.zip_url ? '下载字幕ZIP' : '下载字幕');
+            link.href = d.url || d.zip_url;
+            link.textContent = d.download_label || '下载字幕';
             link.style.display = '';
           }
           if(done) done(d);
@@ -1861,8 +1936,8 @@ async function exportLocalSubtitle(){
     const data = await res.json();
     if(data.error) throw new Error(data.error);
     const link = document.getElementById('localSubDownload');
-    link.href = data.zip_url || data.url;
-    link.textContent = data.zip_url ? '下载字幕ZIP' : '下载字幕';
+    link.href = data.url || data.zip_url;
+    link.textContent = data.download_label || '下载字幕';
     link.style.display = '';
     setLocalStatus(100, '字幕已导出：' + data.file);
     showToast('字幕已导出');
@@ -2265,6 +2340,7 @@ async function startLocalSubtitle(){
   fd.append('prompt', cfg.prompt);
   fd.append('reference_materials', cfg.reference_materials || '');
   fd.append('translation_reference', cfg.translation_reference || '');
+  fd.append('character_cn_names', cfg.character_cn_names ? '1' : '0');
   fd.append('compare_enabled', compareCfg.compare_enabled ? '1' : '0');
   fd.append('compare_api_url', compareCfg.compare_api_url || '');
   fd.append('compare_api_key', compareCfg.compare_api_key || '');
@@ -2283,8 +2359,8 @@ async function startLocalSubtitle(){
     await pollLocalTask(data.task_id, d => {
       if(d.url || d.zip_url){
         const link = document.getElementById('localSubDownload');
-        link.href = d.zip_url || d.url;
-        link.textContent = d.zip_url ? '下载字幕ZIP' : '下载字幕';
+        link.href = d.url || d.zip_url;
+        link.textContent = d.download_label || '下载字幕';
         link.style.display = '';
       }
       showToast('一键字幕已生成');
@@ -2383,7 +2459,7 @@ async function downloadThumbnail(){
 
 // ── AI Description ───────────────────────────────────────────────────
 function loadAiSettings(){
-  ['aiApiUrl','aiApiKey','aiModel','localAsrProvider','volcApiKey','volcResourceId','volcAudioUrl','volcSegmentMinutes','compareApiUrl','compareApiKey','compareModel'].forEach(id => {
+  ['aiApiUrl','aiApiKey','aiModel','localAsrProvider','volcApiKey','volcResourceId','volcAudioUrl','volcSegmentMinutes','compareApiUrl','compareApiKey','compareModel','letterSpacing','lineSpacing'].forEach(id => {
     const el = document.getElementById(id);
     const saved = localStorage.getItem(id);
     if(saved){
@@ -2406,6 +2482,22 @@ function loadAiSettings(){
     localStorage.setItem('compareTranslateToggle', compareToggle.checked ? '1' : '0');
     toggleCompareTranslate();
   });
+  const entityBoostToggle = document.getElementById('entityProfileBoost');
+  const entityBoostSaved = localStorage.getItem('entityProfileBoost');
+  if(entityBoostToggle){
+    if(entityBoostSaved) entityBoostToggle.checked = entityBoostSaved === '1';
+    entityBoostToggle.addEventListener('change', () => {
+      localStorage.setItem('entityProfileBoost', entityBoostToggle.checked ? '1' : '0');
+    });
+  }
+  const characterCnToggle = document.getElementById('characterCnNameToggle');
+  const characterCnSaved = localStorage.getItem('characterCnNameToggle');
+  if(characterCnToggle){
+    if(characterCnSaved) characterCnToggle.checked = characterCnSaved === '1';
+    characterCnToggle.addEventListener('change', () => {
+      localStorage.setItem('characterCnNameToggle', characterCnToggle.checked ? '1' : '0');
+    });
+  }
   toggleLocalAsrProvider();
   toggleCompareTranslate();
 }
