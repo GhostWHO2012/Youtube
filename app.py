@@ -69,10 +69,47 @@ def sanitize_filename(name):
     return re.sub(r'[<>:"/\\|?*]', '_', name)
 
 
+def normalize_project_name_text(name):
+    text = str(name or "")
+    replacements = {
+        "\uff1a": ":",
+        "\ufe55": ":",
+        "\u02f8": ":",
+        "\u201c": '"',
+        "\u201d": '"',
+        "\u2018": "'",
+        "\u2019": "'",
+        "\u300c": '"',
+        "\u300d": '"',
+        "\u300e": '"',
+        "\u300f": '"',
+        "\uff02": '"',
+        "\uff07": "'",
+        "\uff5c": "|",
+        "\u2215": "/",
+        "\u2044": "/",
+        "\uff0f": "/",
+        "\uff3c": "\\",
+        "\uff1f": "?",
+        "\uff0a": "*",
+        "\uff1c": "<",
+        "\uff1e": ">",
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    return text
+
+
 def project_safe_name(name):
-    safe = sanitize_filename(name or "").strip().strip(".")
+    safe = sanitize_filename(normalize_project_name_text(name)).strip().strip(".")
     safe = re.sub(r"\s+", " ", safe)
     return safe[:120] or f"project_{time.strftime('%Y%m%d_%H%M%S')}"
+
+
+def project_match_key(name):
+    safe = project_safe_name(name).casefold()
+    safe = re.sub(r"[_\-\s.]+", "", safe)
+    return safe
 
 
 def normalize_local_project_title(title="", original_name="", fallback="local_video"):
@@ -103,7 +140,14 @@ def local_media_output_stem(name="", fallback="subtitle"):
 
 
 def ensure_project_dirs(title):
-    project_dir = PROJECTS_DIR / project_safe_name(title)
+    safe_name = project_safe_name(title)
+    project_dir = PROJECTS_DIR / safe_name
+    if not project_dir.exists():
+        target_key = project_match_key(safe_name)
+        for existing in PROJECTS_DIR.iterdir() if PROJECTS_DIR.exists() else []:
+            if existing.is_dir() and project_match_key(existing.name) == target_key:
+                project_dir = existing
+                break
     project_dir.mkdir(parents=True, exist_ok=True)
     subdirs = {}
     for key, folder in PROJECT_SUBDIRS.items():
